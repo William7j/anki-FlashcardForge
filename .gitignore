@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.pytest-tmp/
+.mypy_cache/
+build/
+dist/
+*.egg-info/
+
+# Local application configuration may contain an API key.
+flashforge.local.yaml
