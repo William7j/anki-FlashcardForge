@@ -87,9 +87,9 @@ class LlmClient:
             )
             buffer = QBuffer()
             buffer.open(QIODevice.OpenModeFlag.WriteOnly)
-            if not scaled.save(buffer, "JPEG", 88):
+            if not scaled.save(buffer, "JPEG", 88):  # type: ignore[call-overload]
                 raise LlmError("无法压缩截图。")
-            source = bytes(buffer.data())
+            source = bytes(buffer.data().data())
             media_type = "image/jpeg"
         else:
             media_type = mimetypes.guess_type(image_path.name)[0] or "image/png"

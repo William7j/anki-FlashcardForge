@@ -375,7 +375,9 @@ class MainWindow(QMainWindow):
         else:
             self.deck_input.setCurrentText(current_target_deck)
         self._update_capture_button_label()
-        apply_theme(QApplication.instance(), self.settings.theme)
+        application = QApplication.instance()
+        if isinstance(application, QApplication):
+            apply_theme(application, self.settings.theme)
         self.statusBar().showMessage("设置已保存。", 5000)
         return True
 
@@ -654,12 +656,12 @@ class MainWindow(QMainWindow):
             full_screen_path = capture_virtual_desktop()
             self.show()
             selector = RegionSelector(full_screen_path)
-            selected = selector.exec() and selector.selected_path
-            if selected:
+            selected_path = selector.selected_path if selector.exec() else None
+            if selected_path is not None:
                 self._clear_document_source(clear_material=False)
                 self._remove_selected_screenshot()
-                self._image_path = selector.selected_path
-                self.image_status.setText(f"已选择截图：{selector.selected_path.name}")
+                self._image_path = selected_path
+                self.image_status.setText(f"已选择截图：{selected_path.name}")
                 self.clear_capture_button.setEnabled(True)
                 if self.settings.auto_generate_after_capture:
                     self.statusBar().showMessage("截图已选择，正在自动生成卡片...")

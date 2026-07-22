@@ -8,7 +8,7 @@ import sys
 
 def asset_path(name: str) -> Path:
     if getattr(sys, "frozen", False):
-        return Path(sys._MEIPASS) / "flashforge" / "assets" / name
+        return Path(getattr(sys, "_MEIPASS")) / "flashforge" / "assets" / name
     return Path(__file__).parent / "assets" / name
 
 
