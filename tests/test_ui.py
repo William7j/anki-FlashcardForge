@@ -1,19 +1,22 @@
-from PySide6.QtCore import QThread
+from PySide6.QtCore import QThread, QTimer
 from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from flashforge.config import AppSettings
+from flashforge.models import Flashcard
 from flashforge.prompts import PromptManager
-import flashforge.ui as ui
+from flashforge.screenshot import GlobalScreenshotHotkey, RegionSelector, capture_virtual_desktop
+from flashforge.ui import MainWindow
+from flashforge.ui import main_window as ui_main_window
 
 
 def _window(monkeypatch, tmp_path, settings=None):
     app = QApplication.instance() or QApplication([])
     prompt_manager = PromptManager(user_prompt_dir=tmp_path / "prompts")
-    monkeypatch.setattr(ui, "PromptManager", lambda: prompt_manager)
-    monkeypatch.setattr(ui.GlobalScreenshotHotkey, "register", lambda self: False)
-    monkeypatch.setattr(ui.MainWindow, "_refresh_decks", lambda self, *args, **kwargs: None)
-    return app, ui.MainWindow(settings or AppSettings()), prompt_manager
+    monkeypatch.setattr(ui_main_window, "PromptManager", lambda: prompt_manager)
+    monkeypatch.setattr(GlobalScreenshotHotkey, "register", lambda self: False)
+    monkeypatch.setattr(MainWindow, "_refresh_decks", lambda self, *args, **kwargs: None)
+    return app, MainWindow(settings or AppSettings()), prompt_manager
 
 
 def test_switching_prompt_flushes_pending_autosave(monkeypatch, tmp_path) -> None:
@@ -73,12 +76,12 @@ def test_settings_save_reregisters_hotkey_and_auto_import(monkeypatch, tmp_path)
     unregistrations = []
     monkeypatch.setattr(AppSettings, "save", lambda self: None)
     monkeypatch.setattr(
-        ui.GlobalScreenshotHotkey,
+        GlobalScreenshotHotkey,
         "register",
         lambda hotkey: registrations.append(hotkey.shortcut) or True,
     )
     monkeypatch.setattr(
-        ui.GlobalScreenshotHotkey,
+        GlobalScreenshotHotkey,
         "unregister",
         lambda hotkey: unregistrations.append(hotkey.shortcut),
     )
@@ -99,7 +102,7 @@ def test_settings_save_reregisters_hotkey_and_auto_import(monkeypatch, tmp_path)
 def test_settings_save_keeps_existing_hotkey_when_new_hotkey_cannot_register(monkeypatch, tmp_path) -> None:
     _, window, _ = _window(monkeypatch, tmp_path)
     warnings = []
-    monkeypatch.setattr(ui.GlobalScreenshotHotkey, "register", lambda hotkey: False)
+    monkeypatch.setattr(GlobalScreenshotHotkey, "register", lambda hotkey: False)
     monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args))
     window.screenshot_hotkey_input.setKeySequence(
         QKeySequence.fromString("Ctrl+Shift+S", QKeySequence.SequenceFormat.PortableText)
@@ -117,7 +120,7 @@ def test_generation_completion_starts_automatic_anki_import(monkeypatch, tmp_pat
         tmp_path,
         AppSettings(auto_import_after_generation=True),
     )
-    card = ui.Flashcard.from_payload(
+    card = Flashcard.from_payload(
         {"type": "qa", "fields": {"question": "Q", "answer": "A"}}
     )
     imported = []
@@ -180,7 +183,7 @@ title: 微积分课堂
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        ui.QFileDialog,
+        ui_main_window.QFileDialog,
         "getOpenFileName",
         lambda *args, **kwargs: (str(source), "Markdown 文件 (*.md *.markdown)"),
     )
@@ -202,7 +205,7 @@ def test_editing_cards_does_not_schedule_another_auto_import(monkeypatch, tmp_pa
         tmp_path,
         AppSettings(auto_import_after_generation=True),
     )
-    card = ui.Flashcard.from_payload(
+    card = Flashcard.from_payload(
         {"type": "qa", "fields": {"question": "Q", "answer": "A"}}
     )
 
@@ -232,9 +235,9 @@ def test_screenshot_auto_starts_generation_when_enabled(monkeypatch, tmp_path) -
         def exec(self):
             return True
 
-    monkeypatch.setattr(ui, "capture_virtual_desktop", lambda: full_screen)
-    monkeypatch.setattr(ui, "RegionSelector", FakeSelector)
-    monkeypatch.setattr(ui.QTimer, "singleShot", lambda _delay, callback: callback())
+    monkeypatch.setattr(ui_main_window, "capture_virtual_desktop", lambda: full_screen)
+    monkeypatch.setattr(ui_main_window, "RegionSelector", FakeSelector)
+    monkeypatch.setattr(QTimer, "singleShot", lambda _delay, callback: callback())
     monkeypatch.setattr(window, "_start_generation", lambda: generated.append(True))
 
     window._capture_screenshot()

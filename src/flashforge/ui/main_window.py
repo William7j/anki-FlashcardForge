@@ -1,35 +1,25 @@
-"""PySide6 user interface for the first FlashForge MVP flow."""
+"""Main application window — the primary UI entry point."""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Sequence
 
-from PySide6.QtCore import QObject, QThread, QTimer, Signal
-from PySide6.QtGui import (
-    QAction,
-    QColor,
-    QCloseEvent,
-    QIcon,
-    QKeySequence,
-    QSyntaxHighlighter,
-    QTextCharFormat,
-)
+from PySide6.QtCore import QThread, QTimer, Signal
+from PySide6.QtGui import QAction, QCloseEvent, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
-    QDialog,
-    QDialogButtonBox,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
+    QInputDialog,
+    QKeySequenceEdit,
     QLabel,
     QLineEdit,
     QMainWindow,
     QMessageBox,
-    QInputDialog,
-    QKeySequenceEdit,
     QPlainTextEdit,
     QPushButton,
     QStatusBar,
@@ -40,12 +30,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from flashforge.config import AppSettings, OLLAMA_BASE_URL
 from flashforge.anki import AnkiConnectClient, AnkiConnectError, ImportResult
+from flashforge.config import AppSettings, OLLAMA_BASE_URL
 from flashforge.document import DocumentParseError, load_markdown_document
 from flashforge.models import CardType, Flashcard
 from flashforge.pipeline import CardPipeline
-from flashforge.prompts import DEFAULT_PROMPT_NAME, MATERIAL_TOKEN, PromptManager
+from flashforge.prompts import DEFAULT_PROMPT_NAME, PromptManager
 from flashforge.resources import app_icon_path
 from flashforge.screenshot import (
     GlobalScreenshotHotkey,
@@ -56,231 +46,15 @@ from flashforge.screenshot import (
 from flashforge.secrets import SecretStorageError
 from flashforge.theme import apply_theme
 
-
-class GenerationWorker(QObject):
-    generated = Signal(object)
-    failed = Signal(str)
-    finished = Signal()
-
-    def __init__(
-        self,
-        settings: AppSettings,
-        material: str,
-        image_path: Path | None = None,
-        document_mode: bool = False,
-    ) -> None:
-        super().__init__()
-        self.settings = settings
-        self.material = material
-        self.image_path = image_path
-        self.document_mode = document_mode
-
-    def run(self) -> None:
-        try:
-            pipeline = CardPipeline(self.settings)
-            cards = (
-                pipeline.generate_from_image(self.image_path)
-                if self.image_path is not None
-                else pipeline.generate_from_text(
-                    self.material,
-                    document_mode=self.document_mode,
-                )
-            )
-            self.generated.emit(cards)
-        except Exception as exc:  # Exposed to the user without terminating the Qt event loop.
-            self.failed.emit(str(exc))
-        finally:
-            self.finished.emit()
-
-
-class ImportWorker(QObject):
-    progressed = Signal(int, int)
-    imported = Signal(object)
-    failed = Signal(str)
-    finished = Signal()
-
-    def __init__(self, settings: AppSettings, cards: Sequence[Flashcard]) -> None:
-        super().__init__()
-        self.settings = settings
-        self.cards = list(cards)
-
-    def run(self) -> None:
-        try:
-            result = CardPipeline(self.settings).import_to_anki(self.cards, self.progressed.emit)
-            self.imported.emit(result)
-        except Exception as exc:  # Exposed to the user without terminating the Qt event loop.
-            self.failed.emit(str(exc))
-        finally:
-            self.finished.emit()
-
-
-class RegenerationWorker(QObject):
-    regenerated = Signal(object)
-    failed = Signal(str)
-    finished = Signal()
-
-    def __init__(
-        self,
-        settings: AppSettings,
-        card: Flashcard,
-        feedback: str,
-        material: str,
-        image_path: Path | None,
-        document_mode: bool,
-    ) -> None:
-        super().__init__()
-        self.settings = settings
-        self.card = card
-        self.feedback = feedback
-        self.material = material
-        self.image_path = image_path
-        self.document_mode = document_mode
-
-    def run(self) -> None:
-        try:
-            card = CardPipeline(self.settings).regenerate_card(
-                self.card,
-                self.feedback,
-                material=self.material,
-                image_path=self.image_path,
-                document_mode=self.document_mode,
-            )
-            self.regenerated.emit(card)
-        except Exception as exc:  # Exposed to the user without terminating the Qt event loop.
-            self.failed.emit(str(exc))
-        finally:
-            self.finished.emit()
-
-
-class TemplateSyncWorker(QObject):
-    updated = Signal(int)
-    failed = Signal(str)
-    finished = Signal()
-
-    def run(self) -> None:
-        try:
-            self.updated.emit(AnkiConnectClient().ensure_and_upgrade_note_types())
-        except AnkiConnectError as exc:
-            self.failed.emit(str(exc))
-        finally:
-            self.finished.emit()
-
-
-class DeckLoadWorker(QObject):
-    loaded = Signal(object)
-    failed = Signal(str)
-    finished = Signal()
-
-    def run(self) -> None:
-        try:
-            self.loaded.emit(AnkiConnectClient().deck_names())
-        except AnkiConnectError as exc:
-            self.failed.emit(str(exc))
-        finally:
-            self.finished.emit()
-
-
-class CardEditorDialog(QDialog):
-    """Edit one card while reusing the same validation applied to LLM output."""
-
-    FIELD_LABELS = {
-        "question": "问题",
-        "content": "填空内容",
-        "answer": "答案",
-        "options": "选项（每行一项）",
-        "remark": "备注",
-    }
-
-    def __init__(self, card: Flashcard, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.card: Flashcard | None = None
-        self.setWindowTitle("编辑卡片")
-        self.setMinimumSize(620, 520)
-        layout = QVBoxLayout(self)
-        self.form = QFormLayout()
-        self.card_type_input = QComboBox()
-        for card_type in CardType:
-            self.card_type_input.addItem(card_type.value, card_type)
-        self.card_type_input.setCurrentIndex(list(CardType).index(card.card_type))
-        self.card_type_input.currentIndexChanged.connect(self._sync_visible_fields)
-        self.form.addRow("题型", self.card_type_input)
-        self.field_inputs: dict[str, QPlainTextEdit] = {}
-        for field_name in self.FIELD_LABELS:
-            input_widget = QPlainTextEdit(card.fields.get(field_name, ""))
-            input_widget.setMinimumHeight(68)
-            self.field_inputs[field_name] = input_widget
-            self.form.addRow(self.FIELD_LABELS[field_name], input_widget)
-        self.tags_input = QLineEdit(", ".join(card.tags))
-        self.tags_input.setPlaceholderText("用逗号分隔标签")
-        self.form.addRow("标签", self.tags_input)
-        layout.addLayout(self.form)
-        self.error_label = QLabel()
-        self.error_label.setStyleSheet("color: #b91c1c;")
-        self.error_label.setWordWrap(True)
-        layout.addWidget(self.error_label)
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
-        )
-        buttons.accepted.connect(self._save)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-        self._active_fields: set[str] = set()
-        self._sync_visible_fields()
-
-    def _selected_type(self) -> CardType:
-        return CardType(str(self.card_type_input.currentData()))
-
-    def _sync_visible_fields(self) -> None:
-        card_type = self._selected_type()
-        visible = {"remark"}
-        if card_type is CardType.CLOZE:
-            visible.add("content")
-        else:
-            visible.update({"question", "answer"})
-        if card_type in {CardType.CHOICE, CardType.MULTICHOICE}:
-            visible.add("options")
-        self._active_fields = visible
-        for field_name, input_widget in self.field_inputs.items():
-            input_widget.setVisible(field_name in visible)
-            label = self.form.labelForField(input_widget)
-            if label:
-                label.setVisible(field_name in visible)
-
-    def _save(self) -> None:
-        fields = {
-            field_name: input_widget.toPlainText().strip()
-            for field_name, input_widget in self.field_inputs.items()
-            if field_name in self._active_fields
-        }
-        tags = [tag.strip() for tag in self.tags_input.text().replace("，", ",").split(",") if tag.strip()]
-        try:
-            self.card = Flashcard.from_payload(
-                {"type": self._selected_type().value, "fields": fields, "tags": tags}
-            )
-        except Exception as exc:
-            self.error_label.setText(str(exc))
-            return
-        self.accept()
-
-
-class PromptHighlighter(QSyntaxHighlighter):
-    def __init__(self, document) -> None:  # type: ignore[no-untyped-def]
-        super().__init__(document)
-        self.heading_format = QTextCharFormat()
-        self.heading_format.setForeground(QColor("#0f766e"))
-        self.json_format = QTextCharFormat()
-        self.json_format.setForeground(QColor("#1d4ed8"))
-        self.token_format = QTextCharFormat()
-        self.token_format.setForeground(QColor("#b45309"))
-
-    def highlightBlock(self, text: str) -> None:
-        if text.lstrip().startswith("#"):
-            self.setFormat(0, len(text), self.heading_format)
-        if text.strip().startswith(("{", "[", "\"")):
-            self.setFormat(0, len(text), self.json_format)
-        start = text.find(MATERIAL_TOKEN)
-        if start >= 0:
-            self.setFormat(start, len(MATERIAL_TOKEN), self.token_format)
+from flashforge.ui.editor import CardEditorDialog
+from flashforge.ui.highlight import PromptHighlighter
+from flashforge.ui.workers import (
+    DeckLoadWorker,
+    GenerationWorker,
+    ImportWorker,
+    RegenerationWorker,
+    TemplateSyncWorker,
+)
 
 
 class MainWindow(QMainWindow):
@@ -352,6 +126,14 @@ class MainWindow(QMainWindow):
         layout.setSpacing(12)
 
         layout.addWidget(QLabel("学习材料"))
+        self.material_input = QPlainTextEdit()
+        self.material_input.setPlaceholderText("粘贴需要记忆的文字、笔记或章节内容...")
+        self.material_input.setMinimumHeight(180)
+        layout.addWidget(self.material_input)
+
+        self.image_status = QLabel("未选择截图")
+        layout.addWidget(self.image_status)
+
         document_controls = QHBoxLayout()
         self.load_markdown_button = QPushButton("导入 Markdown")
         self.load_markdown_button.clicked.connect(self._load_markdown_file)
@@ -363,13 +145,6 @@ class MainWindow(QMainWindow):
         self.document_status = QLabel("未导入本地资料")
         document_controls.addWidget(self.document_status, stretch=1)
         layout.addLayout(document_controls)
-        self.material_input = QPlainTextEdit()
-        self.material_input.setPlaceholderText("粘贴需要记忆的文字、笔记或章节内容...")
-        self.material_input.setMinimumHeight(180)
-        layout.addWidget(self.material_input)
-
-        self.image_status = QLabel("未选择截图")
-        layout.addWidget(self.image_status)
 
         controls = QHBoxLayout()
         controls.addWidget(QLabel("导入牌组"))

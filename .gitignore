@@ -8,5 +8,7 @@ build/
 dist/
 *.egg-info/
 
+dist-update/
+
 # Local application configuration may contain an API key.
 flashforge.local.yaml
