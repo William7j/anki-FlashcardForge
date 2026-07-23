@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Sequence
 
-from PySide6.QtCore import QThread, QTimer, Signal
+from PySide6.QtCore import QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QAction, QCloseEvent, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
@@ -69,15 +69,21 @@ class MainWindow(QMainWindow):
         self._document_mode = False
         self._generation_thread: QThread | None = None
         self._generation_worker: GenerationWorker | None = None
+        self._generation_error: str | None = None
         self._import_thread: QThread | None = None
         self._import_worker: ImportWorker | None = None
+        self._import_error: str | None = None
         self._regeneration_thread: QThread | None = None
         self._regeneration_worker: RegenerationWorker | None = None
         self._regeneration_row: int | None = None
+        self._regeneration_error: str | None = None
         self._template_sync_thread: QThread | None = None
         self._template_sync_worker: TemplateSyncWorker | None = None
+        self._template_sync_error: str | None = None
         self._deck_load_thread: QThread | None = None
         self._deck_load_worker: DeckLoadWorker | None = None
+        self._deck_load_error: str | None = None
+        self._deck_load_show_error = False
         self._capture_in_progress = False
         self._auto_import_pending = False
         self._last_material = ""
@@ -422,6 +428,8 @@ class MainWindow(QMainWindow):
     def _refresh_decks(self, checked: bool = False, *, show_error: bool = True) -> None:
         if self._deck_load_thread is not None:
             return
+        self._deck_load_error = None
+        self._deck_load_show_error = show_error
         self.refresh_decks_button.setEnabled(False)
         self.statusBar().showMessage("正在读取 Anki 牌组...")
         self._deck_load_thread = QThread(self)
@@ -429,15 +437,14 @@ class MainWindow(QMainWindow):
         self._deck_load_worker.moveToThread(self._deck_load_thread)
         self._deck_load_thread.started.connect(self._deck_load_worker.run)
         self._deck_load_worker.loaded.connect(self._set_available_decks)
-        self._deck_load_worker.failed.connect(
-            lambda message: self._deck_load_failed(message, show_error)
-        )
+        self._deck_load_worker.failed.connect(self._deck_load_failed)
         self._deck_load_worker.finished.connect(self._deck_load_thread.quit)
         self._deck_load_worker.finished.connect(self._deck_load_worker.deleteLater)
         self._deck_load_thread.finished.connect(self._deck_load_finished)
         self._deck_load_thread.finished.connect(self._deck_load_thread.deleteLater)
         self._deck_load_thread.start()
 
+    @Slot(object)
     def _set_available_decks(self, deck_names: Sequence[str]) -> None:
         current = self.deck_input.currentText().strip()
         self.deck_input.blockSignals(True)
@@ -447,16 +454,21 @@ class MainWindow(QMainWindow):
         self.deck_input.blockSignals(False)
         self.statusBar().showMessage(f"已读取 {len(deck_names)} 个 Anki 牌组。", 5000)
 
-    def _deck_load_failed(self, message: str, show_error: bool) -> None:
-        if show_error:
-            QMessageBox.warning(self, "无法读取 Anki 牌组", message)
-        else:
-            self.statusBar().showMessage("Anki 未启动，仍可手动输入牌组名称。", 5000)
+    @Slot(str)
+    def _deck_load_failed(self, message: str) -> None:
+        self._deck_load_error = message
 
+    @Slot()
     def _deck_load_finished(self) -> None:
         self.refresh_decks_button.setEnabled(True)
         self._deck_load_worker = None
         self._deck_load_thread = None
+        error = self._deck_load_error
+        self._deck_load_error = None
+        if error and self._deck_load_show_error:
+            QMessageBox.warning(self, "无法读取 Anki 牌组", error)
+        elif error:
+            self.statusBar().showMessage("Anki 未启动，仍可手动输入牌组名称。", 5000)
 
     def _sync_anki_templates(self) -> None:
         if self._template_sync_thread is not None:
@@ -472,26 +484,36 @@ class MainWindow(QMainWindow):
             return
         self.sync_templates_button.setEnabled(False)
         self.statusBar().showMessage("正在更新 FlashForge Anki 模板...")
+        self._template_sync_error = None
         self._template_sync_thread = QThread(self)
         self._template_sync_worker = TemplateSyncWorker()
         self._template_sync_worker.moveToThread(self._template_sync_thread)
         self._template_sync_thread.started.connect(self._template_sync_worker.run)
-        self._template_sync_worker.updated.connect(
-            lambda count: self.statusBar().showMessage(f"已更新 {count} 个 Anki 笔记类型。", 8000)
-        )
-        self._template_sync_worker.failed.connect(
-            lambda message: QMessageBox.warning(self, "无法更新 Anki 模板", message)
-        )
+        self._template_sync_worker.updated.connect(self._template_sync_updated)
+        self._template_sync_worker.failed.connect(self._template_sync_failed)
         self._template_sync_worker.finished.connect(self._template_sync_thread.quit)
         self._template_sync_worker.finished.connect(self._template_sync_worker.deleteLater)
         self._template_sync_thread.finished.connect(self._template_sync_finished)
         self._template_sync_thread.finished.connect(self._template_sync_thread.deleteLater)
         self._template_sync_thread.start()
 
+    @Slot(int)
+    def _template_sync_updated(self, count: int) -> None:
+        self.statusBar().showMessage(f"已更新 {count} 个 Anki 笔记类型。", 8000)
+
+    @Slot(str)
+    def _template_sync_failed(self, message: str) -> None:
+        self._template_sync_error = message
+
+    @Slot()
     def _template_sync_finished(self) -> None:
         self.sync_templates_button.setEnabled(True)
         self._template_sync_worker = None
         self._template_sync_thread = None
+        error = self._template_sync_error
+        self._template_sync_error = None
+        if error:
+            QMessageBox.warning(self, "无法更新 Anki 模板", error)
 
     def _prompt_selection_changed(self, name: str) -> None:
         if not name:
@@ -603,6 +625,7 @@ class MainWindow(QMainWindow):
         self._update_card_action_state()
         self.statusBar().showMessage("正在生成卡片...")
         self._auto_import_pending = False
+        self._generation_error = None
         self._last_material = material
         self._last_image_path = self._image_path
         self._last_document_mode = self._document_mode and self._image_path is None
@@ -616,20 +639,25 @@ class MainWindow(QMainWindow):
         self._generation_worker.moveToThread(self._generation_thread)
         self._generation_thread.started.connect(self._generation_worker.run)
         self._generation_worker.generated.connect(self._show_cards)
-        self._generation_worker.failed.connect(
-            lambda message: QMessageBox.warning(self, "生成失败", message)
-        )
+        self._generation_worker.failed.connect(self._generation_failed)
         self._generation_worker.finished.connect(self._generation_thread.quit)
         self._generation_worker.finished.connect(self._generation_worker.deleteLater)
         self._generation_thread.finished.connect(self._generation_finished)
         self._generation_thread.finished.connect(self._generation_thread.deleteLater)
         self._generation_thread.start()
 
+    @Slot(str)
+    def _generation_failed(self, message: str) -> None:
+        self._generation_error = message
+
+    @Slot()
     def _generation_finished(self) -> None:
         auto_import = self._auto_import_pending and bool(self.cards)
         self._auto_import_pending = False
         self._generation_worker = None
         self._generation_thread = None
+        error = self._generation_error
+        self._generation_error = None
         if auto_import:
             self._import_cards()
             return
@@ -638,6 +666,10 @@ class MainWindow(QMainWindow):
         self.clear_capture_button.setEnabled(self._image_path is not None)
         self._set_document_controls_enabled(True)
         self.refresh_decks_button.setEnabled(self._deck_load_thread is None)
+        self.import_button.setEnabled(bool(self.cards))
+        self._update_card_action_state()
+        if error:
+            QMessageBox.warning(self, "生成失败", error)
 
     def _capture_screenshot(self) -> None:
         if (
@@ -694,6 +726,7 @@ class MainWindow(QMainWindow):
         except OSError:
             pass
 
+    @Slot(object)
     def _show_cards(
         self,
         cards: Sequence[Flashcard],
@@ -774,6 +807,7 @@ class MainWindow(QMainWindow):
         self._set_card_workflow_enabled(False)
         self.statusBar().showMessage("正在重新生成选中卡片...")
         self._regeneration_row = row
+        self._regeneration_error = None
         self._regeneration_thread = QThread(self)
         self._regeneration_worker = RegenerationWorker(
             self.settings,
@@ -786,15 +820,14 @@ class MainWindow(QMainWindow):
         self._regeneration_worker.moveToThread(self._regeneration_thread)
         self._regeneration_thread.started.connect(self._regeneration_worker.run)
         self._regeneration_worker.regenerated.connect(self._replace_regenerated_card)
-        self._regeneration_worker.failed.connect(
-            lambda message: QMessageBox.warning(self, "重新生成失败", message)
-        )
+        self._regeneration_worker.failed.connect(self._regeneration_failed)
         self._regeneration_worker.finished.connect(self._regeneration_thread.quit)
         self._regeneration_worker.finished.connect(self._regeneration_worker.deleteLater)
         self._regeneration_thread.finished.connect(self._regeneration_finished)
         self._regeneration_thread.finished.connect(self._regeneration_thread.deleteLater)
         self._regeneration_thread.start()
 
+    @Slot(object)
     def _replace_regenerated_card(self, card: Flashcard) -> None:
         if self._regeneration_row is None:
             return
@@ -803,11 +836,20 @@ class MainWindow(QMainWindow):
         self.card_table.selectRow(self._regeneration_row)
         self.statusBar().showMessage("选中卡片已重新生成。", 5000)
 
+    @Slot(str)
+    def _regeneration_failed(self, message: str) -> None:
+        self._regeneration_error = message
+
+    @Slot()
     def _regeneration_finished(self) -> None:
         self._regeneration_worker = None
         self._regeneration_thread = None
         self._regeneration_row = None
         self._set_card_workflow_enabled(True)
+        error = self._regeneration_error
+        self._regeneration_error = None
+        if error:
+            QMessageBox.warning(self, "重新生成失败", error)
 
     def _set_card_workflow_enabled(self, enabled: bool) -> None:
         self.generate_button.setEnabled(enabled)
@@ -845,6 +887,7 @@ class MainWindow(QMainWindow):
         self.deck_input.setEnabled(False)
         self.refresh_decks_button.setEnabled(False)
         self.statusBar().showMessage(f"正在导入 0 / {len(self.cards)} 张卡片...")
+        self._import_error = None
         self._import_thread = QThread(self)
         self._import_worker = ImportWorker(settings, self.cards)
         self._import_worker.moveToThread(self._import_thread)
@@ -858,19 +901,25 @@ class MainWindow(QMainWindow):
         self._import_thread.finished.connect(self._import_thread.deleteLater)
         self._import_thread.start()
 
+    @Slot(int, int)
     def _show_import_progress(self, completed: int, total: int) -> None:
         self.statusBar().showMessage(f"正在导入 {completed} / {total} 张卡片...")
 
+    @Slot(object)
     def _import_succeeded(self, result: ImportResult) -> None:
         deck_name = self.deck_input.currentText().strip()
         message = f"已导入 {result.added_count} 张卡片到 {deck_name}。"
         if result.skipped_count:
-            message += f" 跳过 {result.skipped_count} 张已存在或无效的卡片。"
+            message += f" 跳过 {result.skipped_count} 张已存在的卡片。"
+        if result.failed_count:
+            message += f" {result.failed_count} 张卡片导入失败。"
         self.statusBar().showMessage(message, 8000)
 
+    @Slot(str)
     def _import_failed(self, message: str) -> None:
-        QMessageBox.warning(self, "无法导入 Anki", message)
+        self._import_error = message
 
+    @Slot()
     def _import_finished(self) -> None:
         self.import_button.setEnabled(bool(self.cards))
         self.generate_button.setEnabled(True)
@@ -882,6 +931,10 @@ class MainWindow(QMainWindow):
         self._import_worker = None
         self._import_thread = None
         self._update_card_action_state()
+        error = self._import_error
+        self._import_error = None
+        if error:
+            QMessageBox.warning(self, "无法导入 Anki", error)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._prompt_save_timer.stop()

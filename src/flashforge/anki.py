@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 import html
 import re
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Iterator
 
 import httpx
 
@@ -28,10 +29,14 @@ class NoteDefinition:
 class ImportResult:
     note_ids: tuple[int, ...]
     skipped_count: int
+    failed_count: int = 0
 
     @property
     def added_count(self) -> int:
         return len(self.note_ids)
+
+
+IMPORT_BATCH_SIZE = 100
 
 
 BASE_CSS = """
@@ -179,6 +184,7 @@ class AnkiConnectClient:
         self.endpoint = endpoint
         self.timeout_seconds = timeout_seconds
         self._request = request
+        self._http_client: httpx.Client | None = None
 
     def invoke(self, action: str, **params: Any) -> Any:
         payload = {"action": action, "version": 6, "params": params}
@@ -193,9 +199,24 @@ class AnkiConnectClient:
         return response.get("result")
 
     def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
-        response = httpx.post(self.endpoint, json=payload, timeout=self.timeout_seconds)
+        if self._http_client is not None:
+            response = self._http_client.post(self.endpoint, json=payload)
+        else:
+            response = httpx.post(self.endpoint, json=payload, timeout=self.timeout_seconds)
         response.raise_for_status()
         return response.json()
+
+    @contextmanager
+    def _import_request_scope(self) -> Iterator[None]:
+        if self._request is not None:
+            yield
+            return
+        with httpx.Client(timeout=self.timeout_seconds) as client:
+            self._http_client = client
+            try:
+                yield
+            finally:
+                self._http_client = None
 
     def deck_names(self) -> list[str]:
         result = self.invoke("deckNames")
@@ -203,9 +224,15 @@ class AnkiConnectClient:
             raise AnkiConnectError("Anki 未返回有效的牌组列表。")
         return sorted(result, key=str.casefold)
 
-    def ensure_note_types(self) -> None:
+    def ensure_note_types(self, card_types: Iterable[CardType] | None = None) -> None:
         existing = set(self.invoke("modelNames") or [])
-        for definition in NOTE_DEFINITIONS.values():
+        requested_types = set(card_types) if card_types is not None else None
+        definitions = (
+            definition
+            for card_type, definition in NOTE_DEFINITIONS.items()
+            if requested_types is None or card_type in requested_types
+        )
+        for definition in definitions:
             if definition.model_name in existing:
                 continue
             self.invoke(
@@ -253,29 +280,40 @@ class AnkiConnectClient:
         if not target_deck:
             raise AnkiConnectError("牌组名称不能为空。")
         card_list = list(cards)
-        self.ensure_note_types()
-        self.invoke("createDeck", deck=target_deck)
-        notes = [self.note_for_card(card, target_deck) for card in card_list]
-        can_add = self.invoke("canAddNotes", notes=notes)
-        if not isinstance(can_add, list) or len(can_add) != len(card_list):
-            raise AnkiConnectError("Anki 未返回卡片可导入状态。")
+        if not card_list:
+            return ImportResult((), 0)
+
         note_ids: list[int] = []
         skipped_count = 0
+        failed_count = 0
         total = len(card_list)
-        for index, (card, can_add_card) in enumerate(zip(card_list, can_add, strict=True), start=1):
-            if not can_add_card:
-                skipped_count += 1
-            else:
-                note_ids.append(self.add_card(card, target_deck))
-            if on_progress:
-                on_progress(index, total)
-        return ImportResult(tuple(note_ids), skipped_count)
-
-    def add_card(self, card: Flashcard, deck_name: str) -> int:
-        result = self.invoke("addNote", note=self.note_for_card(card, deck_name))
-        if not isinstance(result, int):
-            raise AnkiConnectError("Anki 未返回新笔记的编号。")
-        return result
+        notes = [self.note_for_card(card, target_deck) for card in card_list]
+        with self._import_request_scope():
+            self.ensure_note_types(card.card_type for card in card_list)
+            self.invoke("createDeck", deck=target_deck)
+            for start in range(0, total, IMPORT_BATCH_SIZE):
+                chunk = notes[start : start + IMPORT_BATCH_SIZE]
+                can_add = self.invoke("canAddNotes", notes=chunk)
+                if (
+                    not isinstance(can_add, list)
+                    or len(can_add) != len(chunk)
+                    or not all(isinstance(value, bool) for value in can_add)
+                ):
+                    raise AnkiConnectError("Anki 未返回卡片可导入状态。")
+                addable_notes = [note for note, allowed in zip(chunk, can_add, strict=True) if allowed]
+                skipped_count += len(chunk) - len(addable_notes)
+                if addable_notes:
+                    added = self.invoke("addNotes", notes=addable_notes)
+                    if not isinstance(added, list) or len(added) != len(addable_notes):
+                        raise AnkiConnectError("Anki 未返回有效的批量导入结果。")
+                    for note_id in added:
+                        if isinstance(note_id, int):
+                            note_ids.append(note_id)
+                        else:
+                            failed_count += 1
+                if on_progress:
+                    on_progress(min(start + len(chunk), total), total)
+        return ImportResult(tuple(note_ids), skipped_count, failed_count)
 
     def note_for_card(self, card: Flashcard, deck_name: str) -> dict[str, Any]:
         definition = NOTE_DEFINITIONS[card.card_type]

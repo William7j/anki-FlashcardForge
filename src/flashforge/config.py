@@ -13,7 +13,7 @@ from flashforge.secrets import SecretStorageError, SecretStore
 
 
 OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1"
-DEFAULT_SCREENSHOT_HOTKEY = "ctrl+alt+a"
+DEFAULT_SCREENSHOT_HOTKEY = "alt+s"
 PROVIDERS = {"openai_compatible", "ollama"}
 IMAGE_INPUT_MODES = {"multimodal", "ocr"}
 THEMES = {"system", "light", "dark"}
@@ -29,12 +29,12 @@ class AppSettings:
     provider: str = "openai_compatible"
     api_key: str = ""
     base_url: str = "https://api.openai.com/v1"
-    model: str = "gpt-4.1-mini"
+    model: str = "claude-sonnet-5"
     deck_name: str = "FlashForge"
     prompt_name: str = "default_adaptive"
     image_input_mode: str = "multimodal"
     screenshot_hotkey: str = DEFAULT_SCREENSHOT_HOTKEY
-    auto_generate_after_capture: bool = False
+    auto_generate_after_capture: bool = True
     auto_import_after_generation: bool = False
     theme: str = "system"
     request_timeout_seconds: float = 90.0

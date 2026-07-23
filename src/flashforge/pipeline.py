@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 from typing import Any, Callable
 
 from flashforge.anki import AnkiConnectClient, ImportResult
 from flashforge.config import AppSettings
-from flashforge.llm import LlmClient
+from flashforge.llm import LlmClient, LlmOutputTruncatedError
 from flashforge.models import CardValidationError, Flashcard
 from flashforge.ocr import LocalOcr
 from flashforge.prompts import PromptManager
@@ -18,18 +19,20 @@ class CardGenerationError(ValueError):
     """Raised when an LLM response is not a valid card collection."""
 
 
+DOCUMENT_CHUNK_CHARACTERS = 12_000
+JSON_RETRY_INSTRUCTIONS = """
+
+## JSON 格式重试
+上一轮输出不是完整、合法的 JSON，可能是生成内容过长。请重新生成并遵守以下要求：
+- 只输出一个包含 cards 数组的合法 JSON 对象，不要使用 Markdown 代码块或附加说明。
+- 本次最多生成 16 张卡片，只保留最重要的知识点。
+- 确保所有字符串、对象和数组均完整闭合。
+""".rstrip()
+
+
 def parse_cards(raw_response: str) -> list[Flashcard]:
     """Extract a card array from a plain JSON response or a `cards` wrapper."""
-    try:
-        payload: Any = json.loads(raw_response)
-    except json.JSONDecodeError:
-        start, end = raw_response.find("["), raw_response.rfind("]")
-        if start < 0 or end < start:
-            raise CardGenerationError("模型没有返回 JSON 卡片数组。") from None
-        try:
-            payload = json.loads(raw_response[start : end + 1])
-        except json.JSONDecodeError as exc:
-            raise CardGenerationError("模型返回的卡片 JSON 无法解析。") from exc
+    payload = _extract_json_payload(raw_response)
 
     if isinstance(payload, dict):
         payload = payload.get("cards", payload.get("data"))
@@ -50,6 +53,89 @@ def parse_cards(raw_response: str) -> list[Flashcard]:
     return cards
 
 
+def _extract_json_payload(raw_response: str) -> Any:
+    source = raw_response.strip().lstrip("\ufeff")
+    if not source:
+        raise CardGenerationError("模型返回了空内容。")
+    try:
+        return json.loads(source)
+    except json.JSONDecodeError:
+        pass
+
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"[\[{]", source):
+        try:
+            candidate, _ = decoder.raw_decode(source, match.start())
+        except json.JSONDecodeError:
+            continue
+        if isinstance(candidate, dict) and ("cards" in candidate or "data" in candidate):
+            return candidate
+        if isinstance(candidate, list) and (
+            not candidate or all(isinstance(item, dict) for item in candidate)
+        ):
+            return candidate
+
+    if "[" not in source and "{" not in source:
+        raise CardGenerationError("模型没有返回 JSON 卡片数组。")
+    raise CardGenerationError("模型返回的卡片 JSON 不完整或无法解析。")
+
+
+def _split_document_material(material: str) -> list[str]:
+    source = material.strip()
+    if len(source) <= DOCUMENT_CHUNK_CHARACTERS:
+        return [source]
+
+    blocks = [block.strip() for block in re.split(r"\n\s*\n", source) if block.strip()]
+    chunks: list[str] = []
+    current = ""
+    for block in blocks:
+        if len(block) > DOCUMENT_CHUNK_CHARACTERS:
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.extend(_split_large_block(block))
+            continue
+        candidate = f"{current}\n\n{block}" if current else block
+        if len(candidate) <= DOCUMENT_CHUNK_CHARACTERS:
+            current = candidate
+        else:
+            chunks.append(current)
+            current = block
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _split_large_block(block: str) -> list[str]:
+    chunks: list[str] = []
+    remaining = block
+    while len(remaining) > DOCUMENT_CHUNK_CHARACTERS:
+        boundary = remaining.rfind("\n", 0, DOCUMENT_CHUNK_CHARACTERS + 1)
+        if boundary < DOCUMENT_CHUNK_CHARACTERS // 2:
+            boundary = DOCUMENT_CHUNK_CHARACTERS
+        chunks.append(remaining[:boundary].strip())
+        remaining = remaining[boundary:].strip()
+    if remaining:
+        chunks.append(remaining)
+    return chunks
+
+
+def _deduplicate_cards(cards: list[Flashcard]) -> list[Flashcard]:
+    unique_cards: list[Flashcard] = []
+    seen: set[tuple[Any, ...]] = set()
+    for card in cards:
+        identity = (
+            card.card_type.value,
+            tuple(sorted(card.fields.items())),
+            tuple(sorted(card.tags)),
+        )
+        if identity in seen:
+            continue
+        seen.add(identity)
+        unique_cards.append(card)
+    return unique_cards
+
+
 class CardPipeline:
     def __init__(
         self,
@@ -66,12 +152,29 @@ class CardPipeline:
     def generate_from_text(
         self, material: str, *, document_mode: bool = False
     ) -> list[Flashcard]:
-        prompt = self.prompt_manager.render(
-            material,
-            self.settings.prompt_name,
-            document_mode=document_mode,
-        )
-        return parse_cards(self.llm_client.generate_text(prompt))
+        chunks = _split_document_material(material) if document_mode else [material]
+        cards: list[Flashcard] = []
+        for chunk in chunks:
+            prompt = self.prompt_manager.render(
+                chunk,
+                self.settings.prompt_name,
+                document_mode=document_mode,
+            )
+            cards.extend(self._generate_text_cards(prompt))
+        return _deduplicate_cards(cards)
+
+    def _generate_text_cards(self, prompt: str) -> list[Flashcard]:
+        try:
+            return parse_cards(self.llm_client.generate_text(prompt))
+        except (CardGenerationError, LlmOutputTruncatedError):
+            try:
+                return parse_cards(
+                    self.llm_client.generate_text(f"{prompt}{JSON_RETRY_INSTRUCTIONS}")
+                )
+            except (CardGenerationError, LlmOutputTruncatedError) as second_error:
+                raise CardGenerationError(
+                    "模型连续两次返回不完整或无效的卡片 JSON。请缩短材料或降低生成数量后重试。"
+                ) from second_error
 
     def generate_from_image(self, image_path: Path) -> list[Flashcard]:
         if self.settings.image_input_mode == "ocr":

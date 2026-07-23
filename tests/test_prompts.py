@@ -22,6 +22,7 @@ def test_default_prompt_can_enable_document_extraction_rules() -> None:
 
     assert "本地资料提炼规则" in prompt
     assert "学生回答和教师的中间尝试都不能直接视为事实" in prompt
+    assert "最多生成 24 张卡片" in prompt
     assert "课堂内容" in prompt
 
 

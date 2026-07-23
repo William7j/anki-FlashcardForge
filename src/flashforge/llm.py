@@ -17,6 +17,10 @@ class LlmError(RuntimeError):
     """Raised when a provider cannot return usable card JSON."""
 
 
+class LlmOutputTruncatedError(LlmError):
+    """Raised when the provider reports that generation hit its output limit."""
+
+
 class LlmClient:
     MAX_IMAGE_EDGE = 2048
     MAX_IMAGE_BYTES = 6 * 1024 * 1024
@@ -109,9 +113,12 @@ class LlmClient:
     @staticmethod
     def _content_from_response(response: Any) -> str:
         try:
-            content = response.choices[0].message.content
+            choice = response.choices[0]
+            content = choice.message.content
         except (AttributeError, IndexError, TypeError) as exc:
             raise LlmError("模型响应中没有可用内容。") from exc
+        if getattr(choice, "finish_reason", None) == "length":
+            raise LlmOutputTruncatedError("模型输出达到长度上限，返回内容被截断。")
         if not isinstance(content, str) or not content.strip():
             raise LlmError("模型返回了空内容。")
         return content.strip()

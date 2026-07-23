@@ -1,4 +1,4 @@
-from flashforge.anki import AnkiConnectClient, NOTE_DEFINITIONS, anki_fields_for
+from flashforge.anki import IMPORT_BATCH_SIZE, AnkiConnectClient, NOTE_DEFINITIONS, anki_fields_for
 from flashforge.models import Flashcard
 
 
@@ -37,7 +37,7 @@ def test_all_templates_include_enhancement_script() -> None:
         assert "MathJax" in definition.templates[0]["Front"]
 
 
-def test_import_registers_models_creates_deck_and_adds_note() -> None:
+def test_import_registers_needed_models_creates_deck_and_adds_notes() -> None:
     calls = []
     progress = []
 
@@ -47,8 +47,8 @@ def test_import_registers_models_creates_deck_and_adds_note() -> None:
             return {"result": []}
         if payload["action"] == "canAddNotes":
             return {"result": [True]}
-        if payload["action"] == "addNote":
-            return {"result": 123}
+        if payload["action"] == "addNotes":
+            return {"result": [123]}
         return {"result": None}
 
     client = AnkiConnectClient(request=request)
@@ -61,10 +61,13 @@ def test_import_registers_models_creates_deck_and_adds_note() -> None:
     )
     assert result.note_ids == (123,)
     assert result.skipped_count == 0
+    assert result.failed_count == 0
     assert calls[0]["action"] == "modelNames"
-    assert any(call["action"] == "createModel" for call in calls)
-    add_call = next(call for call in calls if call["action"] == "addNote")
-    assert add_call["params"]["note"]["modelName"] == "FlashForge::QA"
+    create_calls = [call for call in calls if call["action"] == "createModel"]
+    assert [call["params"]["modelName"] for call in create_calls] == ["FlashForge::QA"]
+    add_call = next(call for call in calls if call["action"] == "addNotes")
+    assert add_call["params"]["notes"][0]["modelName"] == "FlashForge::QA"
+    assert not any(call["action"] == "addNote" for call in calls)
     assert progress == [(1, 1)]
 
 
@@ -87,8 +90,118 @@ def test_import_skips_existing_cards_and_keeps_progress() -> None:
 
     assert result.note_ids == ()
     assert result.skipped_count == 1
+    assert result.failed_count == 0
     assert progress == [(1, 1)]
+    assert not any(call["action"] == "addNotes" for call in calls)
+
+
+def test_import_batches_notes_tracks_duplicates_and_partial_failures() -> None:
+    calls = []
+    progress = []
+    next_note_id = 1000
+    total_cards = IMPORT_BATCH_SIZE * 2 + 5
+    duplicates = {"Q 4", f"Q {IMPORT_BATCH_SIZE + 4}", f"Q {IMPORT_BATCH_SIZE * 2 + 4}"}
+
+    def request(payload):
+        nonlocal next_note_id
+        calls.append(payload)
+        if payload["action"] == "modelNames":
+            return {"result": ["FlashForge::QA"]}
+        if payload["action"] == "canAddNotes":
+            return {
+                "result": [
+                    note["fields"]["Question"] not in duplicates
+                    for note in payload["params"]["notes"]
+                ]
+            }
+        if payload["action"] == "addNotes":
+            note_ids = []
+            for note in payload["params"]["notes"]:
+                if note["fields"]["Question"] == "Q 6":
+                    note_ids.append(None)
+                else:
+                    note_ids.append(next_note_id)
+                    next_note_id += 1
+            return {"result": note_ids}
+        return {"result": None}
+
+    cards = [
+        Flashcard.from_payload({"type": "qa", "fields": {"question": f"Q {index}", "answer": "A"}})
+        for index in range(total_cards)
+    ]
+    result = AnkiConnectClient(request=request).import_cards(
+        cards, "FlashForge", lambda completed, total: progress.append((completed, total))
+    )
+
+    can_add_calls = [call for call in calls if call["action"] == "canAddNotes"]
+    add_calls = [call for call in calls if call["action"] == "addNotes"]
+    assert [len(call["params"]["notes"]) for call in can_add_calls] == [IMPORT_BATCH_SIZE, IMPORT_BATCH_SIZE, 5]
+    assert [len(call["params"]["notes"]) for call in add_calls] == [IMPORT_BATCH_SIZE - 1, IMPORT_BATCH_SIZE - 1, 4]
+    assert len(can_add_calls) == len(add_calls) == 3
+    assert result.added_count == total_cards - len(duplicates) - 1
+    assert result.skipped_count == 3
+    assert result.failed_count == 1
+    assert progress == [
+        (IMPORT_BATCH_SIZE, total_cards),
+        (IMPORT_BATCH_SIZE * 2, total_cards),
+        (total_cards, total_cards),
+    ]
     assert not any(call["action"] == "addNote" for call in calls)
+
+
+def test_import_reuses_one_http_client(monkeypatch) -> None:
+    created_clients = []
+
+    class Response:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self):
+            action = self.payload["action"]
+            if action == "modelNames":
+                return {"result": ["FlashForge::QA"]}
+            if action == "canAddNotes":
+                return {"result": [True, True]}
+            if action == "addNotes":
+                return {"result": [10, 11]}
+            return {"result": None}
+
+    class Client:
+        def __init__(self, timeout):
+            self.timeout = timeout
+            self.calls = []
+            created_clients.append(self)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+        def post(self, endpoint, *, json):
+            self.calls.append((endpoint, json))
+            return Response(json)
+
+    monkeypatch.setattr("flashforge.anki.httpx.Client", Client)
+    cards = [
+        Flashcard.from_payload({"type": "qa", "fields": {"question": "Q1", "answer": "A1"}}),
+        Flashcard.from_payload({"type": "qa", "fields": {"question": "Q2", "answer": "A2"}}),
+    ]
+
+    result = AnkiConnectClient(timeout_seconds=17).import_cards(cards, "FlashForge")
+
+    assert result.note_ids == (10, 11)
+    assert len(created_clients) == 1
+    assert created_clients[0].timeout == 17
+    assert [payload["action"] for _, payload in created_clients[0].calls] == [
+        "modelNames",
+        "createDeck",
+        "canAddNotes",
+        "addNotes",
+    ]
 
 
 def test_upgrade_updates_only_existing_flashforge_models() -> None:

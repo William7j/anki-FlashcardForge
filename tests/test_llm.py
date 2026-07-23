@@ -7,7 +7,9 @@ import threading
 from PySide6.QtGui import QColor, QImage
 
 from flashforge.config import AppSettings
-from flashforge.llm import LlmClient
+import pytest
+
+from flashforge.llm import LlmClient, LlmOutputTruncatedError
 
 
 def test_generate_text_uses_json_mode_and_returns_content() -> None:
@@ -26,6 +28,26 @@ def test_generate_text_uses_json_mode_and_returns_content() -> None:
     assert result == '{"cards": []}'
     assert calls[0]["model"] == "test-model"
     assert calls[0]["response_format"] == {"type": "json_object"}
+
+
+def test_reports_provider_output_truncation() -> None:
+    completions = SimpleNamespace()
+
+    def create(**kwargs):
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    finish_reason="length",
+                    message=SimpleNamespace(content='{"cards":['),
+                )
+            ]
+        )
+
+    completions.create = create
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+
+    with pytest.raises(LlmOutputTruncatedError, match="长度上限"):
+        LlmClient(AppSettings(api_key="test-key"), client=client).generate_text("生成卡片")
 
 
 def test_ollama_uses_prompt_json_contract_without_response_format() -> None:

@@ -32,6 +32,10 @@ def test_mapping_uses_defaults_for_omitted_values() -> None:
 
     assert settings.api_key == "key"
     assert settings.base_url == "https://api.openai.com/v1"
+    assert settings.model == "claude-sonnet-5"
+    assert settings.prompt_name == "default_adaptive"
+    assert settings.screenshot_hotkey == "alt+s"
+    assert settings.auto_generate_after_capture is True
 
 
 def test_ollama_settings_do_not_require_an_api_key() -> None:

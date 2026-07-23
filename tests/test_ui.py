@@ -1,3 +1,5 @@
+import time
+
 from PySide6.QtCore import QThread, QTimer
 from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import QApplication, QMessageBox
@@ -92,7 +94,7 @@ def test_settings_save_reregisters_hotkey_and_auto_import(monkeypatch, tmp_path)
 
     assert window._save_settings() is True
     assert registrations == ["ctrl+shift+s"]
-    assert unregistrations == ["ctrl+alt+a"]
+    assert unregistrations == ["alt+s"]
     assert window.settings.screenshot_hotkey == "ctrl+shift+s"
     assert window.settings.auto_import_after_generation is True
     assert "Ctrl+Shift+S" in window.capture_button.text()
@@ -109,7 +111,7 @@ def test_settings_save_keeps_existing_hotkey_when_new_hotkey_cannot_register(mon
     )
 
     assert window._save_settings() is False
-    assert window._screenshot_hotkey.shortcut == "ctrl+alt+a"
+    assert window._screenshot_hotkey.shortcut == "alt+s"
     assert warnings
     window.close()
 
@@ -146,6 +148,52 @@ def test_deck_selector_is_editable_and_preserves_manual_deck(monkeypatch, tmp_pa
         "Biology",
     ]
     assert window.deck_input.currentText() == "手动牌组"
+    window.close()
+
+
+def test_generation_failure_dialog_runs_after_thread_cleanup_on_main_thread(
+    monkeypatch, tmp_path
+) -> None:
+    app, window, _ = _window(
+        monkeypatch,
+        tmp_path,
+        AppSettings(api_key="test"),
+    )
+    main_thread = QThread.currentThread()
+    warnings = []
+
+    def fail_generation(worker) -> None:
+        worker.failed.emit("模拟生成失败")
+        worker.finished.emit()
+
+    def record_warning(*args):
+        warnings.append(
+            {
+                "args": args,
+                "on_main_thread": QThread.currentThread() == main_thread,
+                "thread_cleaned": window._generation_thread is None,
+                "button_enabled": window.generate_button.isEnabled(),
+            }
+        )
+        return QMessageBox.StandardButton.Ok
+
+    monkeypatch.setattr(window, "_save_settings", lambda: True)
+    monkeypatch.setattr(ui_main_window.GenerationWorker, "run", fail_generation)
+    monkeypatch.setattr(QMessageBox, "warning", record_warning)
+    window.material_input.setPlainText("测试材料")
+
+    window._start_generation()
+    deadline = time.monotonic() + 3
+    while window._generation_thread is not None and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+
+    assert len(warnings) == 1
+    assert warnings[0]["args"][1:] == ("生成失败", "模拟生成失败")
+    assert warnings[0]["on_main_thread"] is True
+    assert warnings[0]["thread_cleaned"] is True
+    assert warnings[0]["button_enabled"] is True
+    assert window._generation_thread is None
     window.close()
 
 
