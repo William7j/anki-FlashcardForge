@@ -15,13 +15,17 @@ from flashforge.ui import main_window as ui_main_window
 from flashforge.ui.socratopia_dialog import SocratopiaLessonDialog
 
 
+TEST_APP = QApplication.instance() or QApplication([])
+
+
 def _window(monkeypatch, tmp_path, settings=None):
-    app = QApplication.instance() or QApplication([])
     prompt_manager = PromptManager(user_prompt_dir=tmp_path / "prompts")
     monkeypatch.setattr(ui_main_window, "PromptManager", lambda: prompt_manager)
     monkeypatch.setattr(GlobalScreenshotHotkey, "register", lambda self: False)
     monkeypatch.setattr(MainWindow, "_refresh_decks", lambda self, *args, **kwargs: None)
-    return app, MainWindow(settings or AppSettings()), prompt_manager
+    window = MainWindow(settings or AppSettings())
+    monkeypatch.setattr(window, "_quit_application", lambda: None)
+    return TEST_APP, window, prompt_manager
 
 
 def test_switching_prompt_flushes_pending_autosave(monkeypatch, tmp_path) -> None:
@@ -319,10 +323,11 @@ def test_importing_socratopia_enters_adaptive_course_mode(monkeypatch, tmp_path)
     assert "边界对齐与字节序" in window.document_status.text()
     assert window.load_socratopia_button.text() == "导入自 Socratopia"
     window.close()
+    window.deleteLater()
+    TEST_APP.processEvents()
 
 
 def test_socratopia_dialog_displays_course_and_lesson_records(tmp_path) -> None:
-    app = QApplication.instance() or QApplication([])
     course = SocratopiaCourse(
         account_path=tmp_path / "account",
         profile_id="student",
@@ -349,7 +354,7 @@ def test_socratopia_dialog_displays_course_and_lesson_records(tmp_path) -> None:
     dialog = SocratopiaLessonDialog(
         [course], {course.key: [lesson]}, connected=True
     )
-    app.processEvents()
+    TEST_APP.processEvents()
 
     assert "计算机组成原理" in dialog.course_input.currentText()
     assert dialog.lesson_table.rowCount() == 1
@@ -364,6 +369,8 @@ def test_socratopia_dialog_displays_course_and_lesson_records(tmp_path) -> None:
     assert dialog.selected_course == course
     assert dialog.selected_lesson == lesson
     dialog.close()
+    dialog.deleteLater()
+    TEST_APP.processEvents()
 
 
 def test_editing_cards_does_not_schedule_another_auto_import(monkeypatch, tmp_path) -> None:
