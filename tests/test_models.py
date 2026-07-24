@@ -20,7 +20,37 @@ def test_accepts_latex_braces_inside_native_cloze() -> None:
         }
     )
 
-    assert card.fields["content"] == r"积分结果是{{c1::\(\frac{x^{2}}{2}+C\)}}。"
+    assert card.fields["content"] == r"积分结果是{{c1::\(\frac{x^{2} }{2}+C\)}}。"
+
+
+def test_protects_formula_ending_brace_from_cloze_delimiter() -> None:
+    card = Flashcard.from_payload(
+        {
+            "type": "cloze",
+            "fields": {"content": r"比值为{{c1::\frac{a}{b}}}。"},
+        }
+    )
+
+    assert card.fields["content"] == r"比值为{{c1::\frac{a}{b} }}。"
+
+
+def test_protects_latex_braces_in_multiple_clozes() -> None:
+    card = Flashcard.from_payload(
+        {
+            "type": "cloze",
+            "fields": {
+                "content": (
+                    r"原函数为{{c1::x^a}}，积分为"
+                    r"{{c2::\(\frac{x^{a+1}}{a+1}+C\)}}。"
+                )
+            },
+        }
+    )
+
+    assert card.fields["content"] == (
+        r"原函数为{{c1::x^a}}，积分为"
+        r"{{c2::\(\frac{x^{a+1} }{a+1}+C\)}}。"
+    )
 
 
 def test_normalizes_full_width_cloze_delimiters() -> None:

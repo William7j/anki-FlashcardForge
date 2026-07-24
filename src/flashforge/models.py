@@ -36,6 +36,7 @@ NATIVE_CLOZE_PATTERN = re.compile(r"\{\{c[1-9]\d*::.+\}\}", re.DOTALL)
 LOOSE_CLOZE_START_PATTERN = re.compile(
     r"[\{｛]{2}[cCｃＣ]([0-9０-９]+)[：:]{2}"
 )
+CLOZE_START_PATTERN = re.compile(r"\{\{c[1-9]\d*::")
 FULLWIDTH_DIGIT_TRANSLATION = str.maketrans("０１２３４５６７８９", "0123456789")
 
 
@@ -49,7 +50,54 @@ def _normalize_cloze_syntax(content: str) -> str:
     normalized = LOOSE_CLOZE_START_PATTERN.sub(replace_start, content)
     if "{{c" in normalized:
         normalized = re.sub(r"[\}｝]{2}", "}}", normalized)
-    return normalized
+    return _protect_latex_braces_in_clozes(normalized)
+
+
+def _protect_latex_braces_in_clozes(content: str) -> str:
+    """Keep LaTeX closing braces from being parsed as Anki cloze delimiters."""
+
+    result: list[str] = []
+    cursor = 0
+    while match := CLOZE_START_PATTERN.search(content, cursor):
+        result.append(content[cursor : match.end()])
+        body_start = match.end()
+        position = body_start
+        brace_depth = 0
+        body: list[str] = []
+
+        while position < len(content):
+            char = content[position]
+            escaped = position > body_start and content[position - 1] == "\\"
+
+            if char == "{" and not escaped:
+                brace_depth += 1
+                body.append(char)
+                position += 1
+                continue
+
+            if char == "}" and not escaped:
+                if brace_depth == 0 and content.startswith("}}", position):
+                    if body and body[-1] == "}":
+                        body.append(" ")
+                    result.extend(body)
+                    result.append("}}")
+                    cursor = position + 2
+                    break
+
+                if brace_depth > 0:
+                    brace_depth -= 1
+                    if body and body[-1] == "}":
+                        body.append(" ")
+
+            body.append(char)
+            position += 1
+        else:
+            result.append(content[body_start:])
+            cursor = len(content)
+            break
+
+    result.append(content[cursor:])
+    return "".join(result)
 
 
 @dataclass(frozen=True, slots=True)

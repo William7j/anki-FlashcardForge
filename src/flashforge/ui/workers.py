@@ -24,12 +24,14 @@ class GenerationWorker(QObject):
         material: str,
         image_path: Path | None = None,
         document_mode: bool = False,
+        socratopia_mode: bool = False,
     ) -> None:
         super().__init__()
         self.settings = settings
         self.material = material
         self.image_path = image_path
         self.document_mode = document_mode
+        self.socratopia_mode = socratopia_mode
 
     def run(self) -> None:
         try:
@@ -40,6 +42,7 @@ class GenerationWorker(QObject):
                 else pipeline.generate_from_text(
                     self.material,
                     document_mode=self.document_mode,
+                    socratopia_mode=self.socratopia_mode,
                 )
             )
             self.generated.emit(cards)
@@ -83,6 +86,7 @@ class RegenerationWorker(QObject):
         material: str,
         image_path: Path | None,
         document_mode: bool = False,
+        socratopia_mode: bool = False,
     ) -> None:
         super().__init__()
         self.settings = settings
@@ -91,6 +95,7 @@ class RegenerationWorker(QObject):
         self.material = material
         self.image_path = image_path
         self.document_mode = document_mode
+        self.socratopia_mode = socratopia_mode
 
     def run(self) -> None:
         try:
@@ -100,6 +105,7 @@ class RegenerationWorker(QObject):
                 material=self.material,
                 image_path=self.image_path,
                 document_mode=self.document_mode,
+                socratopia_mode=self.socratopia_mode,
             )
             self.regenerated.emit(card)
         except Exception as exc:  # Exposed to the user without terminating the Qt event loop.

@@ -1,5 +1,11 @@
-from flashforge.anki import IMPORT_BATCH_SIZE, AnkiConnectClient, NOTE_DEFINITIONS, anki_fields_for
-from flashforge.models import Flashcard
+from flashforge.anki import (
+    BASE_CSS,
+    IMPORT_BATCH_SIZE,
+    AnkiConnectClient,
+    NOTE_DEFINITIONS,
+    anki_fields_for,
+)
+from flashforge.models import CardType, Flashcard
 
 
 def test_choice_fields_convert_line_breaks_for_anki() -> None:
@@ -35,6 +41,30 @@ def test_fields_escape_html_and_render_fenced_code() -> None:
 def test_all_templates_include_enhancement_script() -> None:
     for definition in NOTE_DEFINITIONS.values():
         assert "MathJax" in definition.templates[0]["Front"]
+
+
+def test_flashforge_templates_have_distinct_series_identity_and_type_styles() -> None:
+    expected_classes = {
+        CardType.QA: "ff-qa",
+        CardType.CLOZE: "ff-cloze",
+        CardType.JUDGE: "ff-judge",
+        CardType.CHOICE: "ff-choice",
+        CardType.MULTICHOICE: "ff-multichoice",
+    }
+
+    assert "border-left: 6px solid var(--accent)" in BASE_CSS
+    assert "@media (max-width: 520px)" in BASE_CSS
+    assert "@media (prefers-color-scheme: dark)" in BASE_CSS
+    for card_type, definition in NOTE_DEFINITIONS.items():
+        assert definition.model_name.startswith("FlashForge::")
+        assert "Socratopia::" not in definition.model_name
+        front = definition.templates[0]["Front"]
+        back = definition.templates[0]["Back"]
+        assert expected_classes[card_type] in front
+        assert expected_classes[card_type] in back
+        assert "FLASHFORGE / REVIEW" in front
+        assert "FLASHFORGE / REVIEW" in back
+        assert "socratopia-options" not in front
 
 
 def test_import_registers_needed_models_creates_deck_and_adds_notes() -> None:
@@ -93,6 +123,11 @@ def test_import_skips_existing_cards_and_keeps_progress() -> None:
     assert result.failed_count == 0
     assert progress == [(1, 1)]
     assert not any(call["action"] == "addNotes" for call in calls)
+    styling = next(call for call in calls if call["action"] == "updateModelStyling")
+    templates = next(call for call in calls if call["action"] == "updateModelTemplates")
+    assert styling["params"]["model"]["name"] == "FlashForge::QA"
+    assert styling["params"]["model"]["css"] == BASE_CSS
+    assert list(templates["params"]["model"]["templates"]) == ["Card 1"]
 
 
 def test_import_batches_notes_tracks_duplicates_and_partial_failures() -> None:
@@ -198,6 +233,8 @@ def test_import_reuses_one_http_client(monkeypatch) -> None:
     assert created_clients[0].timeout == 17
     assert [payload["action"] for _, payload in created_clients[0].calls] == [
         "modelNames",
+        "updateModelStyling",
+        "updateModelTemplates",
         "createDeck",
         "canAddNotes",
         "addNotes",
@@ -220,6 +257,43 @@ def test_upgrade_updates_only_existing_flashforge_models() -> None:
     templates = next(call for call in calls if call["action"] == "updateModelTemplates")
     assert styling["params"]["model"]["name"] == "FlashForge::QA"
     assert "Card 1" in templates["params"]["model"]["templates"]
+
+
+def test_import_updates_only_models_used_by_current_cards() -> None:
+    calls = []
+
+    def request(payload):
+        calls.append(payload)
+        if payload["action"] == "modelNames":
+            return {"result": [definition.model_name for definition in NOTE_DEFINITIONS.values()]}
+        if payload["action"] == "canAddNotes":
+            return {"result": [True, True]}
+        if payload["action"] == "addNotes":
+            return {"result": [101, 102]}
+        return {"result": None}
+
+    cards = [
+        Flashcard.from_payload(
+            {"type": "qa", "fields": {"question": "Q", "answer": "A"}}
+        ),
+        Flashcard.from_payload(
+            {"type": "cloze", "fields": {"content": "{{c1::answer}}"}}
+        ),
+    ]
+
+    AnkiConnectClient(request=request).import_cards(cards, "FlashForge")
+
+    styling_models = {
+        call["params"]["model"]["name"]
+        for call in calls
+        if call["action"] == "updateModelStyling"
+    }
+    template_models = {
+        call["params"]["model"]["name"]
+        for call in calls
+        if call["action"] == "updateModelTemplates"
+    }
+    assert styling_models == template_models == {"FlashForge::QA", "FlashForge::Cloze"}
 
 
 def test_deck_names_are_sorted_from_ankiconnect() -> None:

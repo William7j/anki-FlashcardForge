@@ -44,10 +44,19 @@ from flashforge.screenshot import (
     capture_virtual_desktop,
 )
 from flashforge.secrets import SecretStorageError
+from flashforge.socratopia import (
+    SocratopiaParseError,
+    SocratopiaTextbookClient,
+    discover_socratopia_accounts,
+    discover_socratopia_courses,
+    discover_socratopia_lessons,
+    load_socratopia_material,
+)
 from flashforge.theme import apply_theme
 
 from flashforge.ui.editor import CardEditorDialog
 from flashforge.ui.highlight import PromptHighlighter
+from flashforge.ui.socratopia_dialog import SocratopiaLessonDialog
 from flashforge.ui.workers import (
     DeckLoadWorker,
     GenerationWorker,
@@ -67,6 +76,7 @@ class MainWindow(QMainWindow):
         self._image_path: Path | None = None
         self._document_path: Path | None = None
         self._document_mode = False
+        self._socratopia_mode = False
         self._generation_thread: QThread | None = None
         self._generation_worker: GenerationWorker | None = None
         self._generation_error: str | None = None
@@ -89,6 +99,7 @@ class MainWindow(QMainWindow):
         self._last_material = ""
         self._last_image_path: Path | None = None
         self._last_document_mode = False
+        self._last_socratopia_mode = False
         self._prompt_manager = PromptManager()
         self._prompt_save_timer = QTimer(self)
         self._prompt_save_timer.setSingleShot(True)
@@ -144,6 +155,9 @@ class MainWindow(QMainWindow):
         self.load_markdown_button = QPushButton("导入 Markdown")
         self.load_markdown_button.clicked.connect(self._load_markdown_file)
         document_controls.addWidget(self.load_markdown_button)
+        self.load_socratopia_button = QPushButton("导入自 Socratopia")
+        self.load_socratopia_button.clicked.connect(self._load_socratopia_course)
+        document_controls.addWidget(self.load_socratopia_button)
         self.clear_document_button = QPushButton("清除本地资料")
         self.clear_document_button.setEnabled(False)
         self.clear_document_button.clicked.connect(lambda: self._clear_document_source())
@@ -203,6 +217,10 @@ class MainWindow(QMainWindow):
         self.delete_card_button.setEnabled(False)
         self.delete_card_button.clicked.connect(self._delete_selected_card)
         card_actions.addWidget(self.delete_card_button)
+        self.delete_all_cards_button = QPushButton("删除全部卡片")
+        self.delete_all_cards_button.setEnabled(False)
+        self.delete_all_cards_button.clicked.connect(self._delete_all_cards)
+        card_actions.addWidget(self.delete_all_cards_button)
         card_actions.addStretch()
         layout.addLayout(card_actions)
         self.card_table.itemSelectionChanged.connect(self._update_card_action_state)
@@ -226,6 +244,7 @@ class MainWindow(QMainWindow):
             self._clear_screenshot()
         self._document_path = document.path
         self._document_mode = True
+        self._socratopia_mode = False
         self.material_input.setPlainText(document.cleaned_material)
         message_summary = (
             f"，{document.message_count} 条课堂消息" if document.message_count else ""
@@ -238,9 +257,86 @@ class MainWindow(QMainWindow):
             8000,
         )
 
+    def _load_socratopia_course(self, checked: bool = False) -> None:
+        self.statusBar().showMessage("正在自动连接 Socratopia 并读取课堂记录...")
+        try:
+            accounts = discover_socratopia_accounts()
+            courses = [
+                course
+                for account in accounts
+                for course in discover_socratopia_courses(account)
+            ]
+            courses.sort(
+                key=lambda course: (
+                    not course.is_active,
+                    course.profile_name.casefold(),
+                    course.title.casefold(),
+                )
+            )
+            lessons_by_course = {
+                course.key: discover_socratopia_lessons(course) for course in courses
+            }
+            courses = [course for course in courses if lessons_by_course[course.key]]
+        except SocratopiaParseError as exc:
+            QMessageBox.warning(self, "无法导入自 Socratopia", str(exc))
+            return
+        if not courses:
+            QMessageBox.information(
+                self,
+                "没有课堂记录",
+                "已找到 Socratopia 数据，但当前没有可以制卡的课堂记录。",
+            )
+            return
+
+        textbook_client = SocratopiaTextbookClient()
+        dialog = SocratopiaLessonDialog(
+            courses,
+            lessons_by_course,
+            connected=textbook_client.is_available(),
+            parent=self,
+        )
+        if not dialog.exec() or dialog.selected_course is None or dialog.selected_lesson is None:
+            self.statusBar().showMessage("已取消选择 Socratopia 课堂。", 3000)
+            return
+        try:
+            source = load_socratopia_material(
+                dialog.selected_course,
+                textbook_client=textbook_client,
+                lesson=dialog.selected_lesson,
+            )
+        except SocratopiaParseError as exc:
+            QMessageBox.warning(self, "无法导入自 Socratopia", str(exc))
+            return
+
+        if self._image_path is not None:
+            self._clear_screenshot()
+        self._document_path = source.course.account_path
+        self._document_mode = True
+        self._socratopia_mode = True
+        self.material_input.setPlainText(source.material)
+        used_original = getattr(source, "used_original_textbook", False)
+        source_label = "qbook 原始教材" if used_original else "课堂教材缓存"
+        summary = (
+            f"{source.lesson_evidence_count} 份教学记录，"
+            f"{source.textbook_section_count} 段{source_label}，"
+            f"{source.existing_card_count} 张已有卡"
+        )
+        lesson_title = source.lesson.title if source.lesson is not None else "课堂记录"
+        self.document_status.setText(
+            f"Socratopia：{source.course.title} / {lesson_title}（{summary}）"
+        )
+        self.document_status.setToolTip(str(source.course.account_path))
+        self.clear_document_button.setEnabled(True)
+        warning = getattr(source, "textbook_warning", "")
+        status = f"已按所选课堂整理《{source.course.title}》：{summary}。"
+        if warning:
+            status += f" {warning} 已自动回退到课堂教材缓存。"
+        self.statusBar().showMessage(status, 12000)
+
     def _clear_document_source(self, *, clear_material: bool = True) -> None:
         self._document_path = None
         self._document_mode = False
+        self._socratopia_mode = False
         self.document_status.setText("未导入本地资料")
         self.document_status.setToolTip("")
         self.clear_document_button.setEnabled(False)
@@ -629,12 +725,14 @@ class MainWindow(QMainWindow):
         self._last_material = material
         self._last_image_path = self._image_path
         self._last_document_mode = self._document_mode and self._image_path is None
+        self._last_socratopia_mode = self._socratopia_mode and self._image_path is None
         self._generation_thread = QThread(self)
         self._generation_worker = GenerationWorker(
             self.settings,
             material,
             self._image_path,
             self._last_document_mode,
+            self._last_socratopia_mode,
         )
         self._generation_worker.moveToThread(self._generation_thread)
         self._generation_thread.started.connect(self._generation_worker.run)
@@ -765,6 +863,7 @@ class MainWindow(QMainWindow):
         self.edit_card_button.setEnabled(selected and not is_busy)
         self.delete_card_button.setEnabled(selected and not is_busy)
         self.regenerate_card_button.setEnabled(selected and not is_busy)
+        self.delete_all_cards_button.setEnabled(bool(self.cards) and not is_busy)
 
     def _edit_selected_card(self) -> None:
         row = self._selected_card_row()
@@ -786,6 +885,23 @@ class MainWindow(QMainWindow):
         if self.cards:
             self.card_table.selectRow(min(row, len(self.cards) - 1))
         self.statusBar().showMessage("已删除选中卡片。", 5000)
+
+    def _delete_all_cards(self) -> None:
+        if not self.cards:
+            return
+        card_count = len(self.cards)
+        confirmed = QMessageBox.question(
+            self,
+            "删除全部卡片",
+            f"确定删除预览中的 {card_count} 张卡片吗？\n\n"
+            "此操作不会删除已经导入 Anki 的卡片。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirmed != QMessageBox.StandardButton.Yes:
+            return
+        self._show_cards([], schedule_auto_import=False)
+        self.statusBar().showMessage(f"已删除全部 {card_count} 张预览卡片。", 5000)
 
     def _regenerate_selected_card(self) -> None:
         row = self._selected_card_row()
@@ -816,6 +932,7 @@ class MainWindow(QMainWindow):
             self._last_material,
             image_path,
             self._last_document_mode and image_path is None,
+            self._last_socratopia_mode and image_path is None,
         )
         self._regeneration_worker.moveToThread(self._regeneration_thread)
         self._regeneration_thread.started.connect(self._regeneration_worker.run)
@@ -863,6 +980,7 @@ class MainWindow(QMainWindow):
 
     def _set_document_controls_enabled(self, enabled: bool) -> None:
         self.load_markdown_button.setEnabled(enabled)
+        self.load_socratopia_button.setEnabled(enabled)
         self.clear_document_button.setEnabled(enabled and self._document_path is not None)
 
     def _import_cards(self) -> None:
@@ -957,5 +1075,17 @@ class MainWindow(QMainWindow):
             )
             event.ignore()
             return
-        self._screenshot_hotkey.unregister()
+        self.prepare_for_exit()
         super().closeEvent(event)
+        if event.isAccepted():
+            self._quit_application()
+
+    def prepare_for_exit(self) -> None:
+        self._prompt_save_timer.stop()
+        self._screenshot_hotkey.unregister()
+
+    @staticmethod
+    def _quit_application() -> None:
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()

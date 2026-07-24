@@ -40,20 +40,127 @@ IMPORT_BATCH_SIZE = 100
 
 
 BASE_CSS = """
-.card { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 21px; text-align: left; color: #1f2937; background: #ffffff; line-height: 1.55; }
-.remark { margin-top: 24px; color: #6b7280; font-size: 15px; }
-.answer { margin-top: 18px; padding-top: 18px; border-top: 1px solid #d1d5db; }
-.option-list { display: grid; gap: 10px; margin-top: 20px; }
-.option-button, .answer-button { width: 100%; box-sizing: border-box; padding: 12px 14px; border: 1px solid #9ca3af; border-radius: 6px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
-.option-button:hover, .option-button.selected { border-color: #0f766e; background: #ccfbf1; }
-.judge-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 20px; }
-.judge-buttons .option-button { text-align: center; }
-.answer-button { margin-top: 16px; text-align: center; background: #0f766e; border-color: #0f766e; color: #ffffff; }
-pre { margin: 16px 0; padding: 14px; overflow-x: auto; border-radius: 6px; background: #f3f4f6; }
+.card {
+  margin: 0;
+  padding: 32px 20px;
+  color: #20262d;
+  background: #edf1f4;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+  font-size: 20px;
+  line-height: 1.62;
+  text-align: left;
+}
+.ff-shell {
+  --accent: #087f8c;
+  max-width: 760px;
+  box-sizing: border-box;
+  margin: 0 auto;
+  padding: 26px 30px 30px;
+  border: 1px solid #d3d9df;
+  border-left: 6px solid var(--accent);
+  border-radius: 4px;
+  background: #fcfcfd;
+  box-shadow: 0 12px 28px rgba(32, 38, 45, .08);
+}
+.ff-qa { --accent: #087f8c; }
+.ff-cloze { --accent: #3157a4; }
+.ff-judge { --accent: #b45f06; }
+.ff-choice { --accent: #b4234d; }
+.ff-multichoice { --accent: #5d6b2f; }
+.ff-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+  padding-bottom: 13px;
+  border-bottom: 1px solid #e1e5e9;
+}
+.ff-kind, .ff-series, .ff-answer-label, .ff-remark-label {
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+.ff-kind { color: var(--accent); font-size: 12px; font-weight: 800; }
+.ff-series { color: #7a838d; font-size: 10px; font-weight: 700; }
+.ff-prompt, .ff-content { font-size: 1.06em; font-weight: 650; }
+.ff-answer {
+  margin-top: 26px;
+  padding: 20px 22px;
+  border: 1px solid #d9dee3;
+  border-left: 3px solid var(--accent);
+  background: #f6f8f9;
+}
+.ff-answer-label, .ff-remark-label {
+  display: block;
+  margin-bottom: 9px;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 800;
+}
+.ff-remark {
+  margin-top: 18px;
+  padding: 14px 17px;
+  border: 1px dashed #c8cfd6;
+  background: #ffffff;
+  color: #59636e;
+  font-size: 15px;
+}
+.option-list { display: grid; gap: 10px; margin-top: 22px; }
+.option-button, .answer-button {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 48px;
+  padding: 11px 14px;
+  border: 1px solid #bbc3cb;
+  border-radius: 4px;
+  background: #ffffff;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.option-button:hover, .option-button.selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, #ffffff);
+}
+.judge-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 22px; }
+.judge-buttons .option-button { text-align: center; font-weight: 700; }
+.answer-button {
+  margin-top: 12px;
+  border-color: #20262d;
+  background: #20262d;
+  color: #ffffff;
+  font-weight: 700;
+  text-align: center;
+}
+.ff-option-review { margin-top: 18px; color: #59636e; font-size: .92em; }
+pre { margin: 16px 0; padding: 14px; overflow-x: auto; border: 1px solid #d9dee3; border-radius: 4px; background: #f0f3f5; }
 pre, code { font-family: 'Cascadia Code', Consolas, monospace; }
-code { font-size: 0.88em; }
-.hljs-comment, .hljs-quote { color: #6b7280; }.hljs-keyword, .hljs-selector-tag { color: #7c3aed; }.hljs-string, .hljs-attr { color: #047857; }.hljs-number, .hljs-literal { color: #b45309; }
-@media (prefers-color-scheme: dark) { .card { color: #e5e7eb; background: #111827; } .answer { border-color: #4b5563; } .remark { color: #9ca3af; } .option-button { border-color: #6b7280; } .option-button:hover, .option-button.selected { background: #134e4a; border-color: #2dd4bf; } pre { background: #030712; } }
+code { font-size: .88em; }
+img { max-width: 100%; height: auto; }
+.hljs-comment, .hljs-quote { color: #6b7280; }
+.hljs-keyword, .hljs-selector-tag { color: #7c3aed; }
+.hljs-string, .hljs-attr { color: #047857; }
+.hljs-number, .hljs-literal { color: #b45309; }
+@media (max-width: 520px) {
+  .card { padding: 12px; font-size: 18px; }
+  .ff-shell { padding: 20px 20px 24px; }
+  .ff-head { align-items: flex-start; flex-direction: column; gap: 3px; }
+  .judge-buttons { grid-template-columns: 1fr; }
+}
+@media (prefers-color-scheme: dark) {
+  .card { color: #e8ebee; background: #171a1e; }
+  .ff-shell { border-color: #424950; background: #22272d; box-shadow: none; }
+  .ff-head { border-color: #414850; }
+  .ff-series { color: #9ba3ac; }
+  .ff-answer { border-color: #48515a; background: #292f36; }
+  .ff-remark { border-color: #555e68; background: #1c2025; color: #b4bbc2; }
+  .option-button { border-color: #59636d; background: #22272d; }
+  .option-button:hover, .option-button.selected { background: #303840; }
+  .answer-button { border-color: #e8ebee; background: #e8ebee; color: #20262d; }
+  .ff-option-review { color: #b4bbc2; }
+  pre { border-color: #424950; background: #14171a; }
+}
 """.strip()
 
 CARD_ENHANCEMENT_SCRIPT = """
@@ -114,6 +221,36 @@ MULTI_SELECT_OPTION_SCRIPT = """
 """.strip()
 
 
+def _card_shell(kind: str, label: str, content: str) -> str:
+    return (
+        f'<article class="ff-shell ff-{kind}">'
+        '<header class="ff-head">'
+        f'<span class="ff-kind">{label}</span>'
+        '<span class="ff-series">FLASHFORGE / REVIEW</span>'
+        '</header>'
+        f'{content}'
+        '</article>'
+        + CARD_ENHANCEMENT_SCRIPT
+    )
+
+
+def _remark_block() -> str:
+    return (
+        '{{#Remark}}<aside class="ff-remark">'
+        '<span class="ff-remark-label">记忆提示</span>{{Remark}}'
+        '</aside>{{/Remark}}'
+    )
+
+
+def _answer_block(answer: str) -> str:
+    return (
+        '<section class="ff-answer">'
+        '<span class="ff-answer-label">答案</span>'
+        f'{answer}'
+        '</section>'
+    )
+
+
 NOTE_DEFINITIONS: dict[CardType, NoteDefinition] = {
     CardType.QA: NoteDefinition(
         "FlashForge::QA",
@@ -121,8 +258,14 @@ NOTE_DEFINITIONS: dict[CardType, NoteDefinition] = {
         (
             {
                 "Name": "Card 1",
-                "Front": "{{Question}}" + CARD_ENHANCEMENT_SCRIPT,
-                "Back": "{{FrontSide}}<div class=answer>{{Answer}}</div>{{#Remark}}<div class=remark>{{Remark}}</div>{{/Remark}}" + CARD_ENHANCEMENT_SCRIPT,
+                "Front": _card_shell("qa", "问答", '<div class="ff-prompt">{{Question}}</div>'),
+                "Back": _card_shell(
+                    "qa",
+                    "问答 / 答案",
+                    '<div class="ff-prompt">{{Question}}</div>'
+                    + _answer_block("{{Answer}}")
+                    + _remark_block(),
+                ),
             },
         ),
     ),
@@ -132,8 +275,14 @@ NOTE_DEFINITIONS: dict[CardType, NoteDefinition] = {
         (
             {
                 "Name": "Cloze",
-                "Front": "{{cloze:Text}}" + CARD_ENHANCEMENT_SCRIPT,
-                "Back": "{{cloze:Text}}{{#Remark}}<div class=remark>{{Remark}}</div>{{/Remark}}" + CARD_ENHANCEMENT_SCRIPT,
+                "Front": _card_shell(
+                    "cloze", "填空", '<div class="ff-content">{{cloze:Text}}</div>'
+                ),
+                "Back": _card_shell(
+                    "cloze",
+                    "填空 / 答案",
+                    '<div class="ff-content">{{cloze:Text}}</div>' + _remark_block(),
+                ),
             },
         ),
         is_cloze=True,
@@ -144,8 +293,22 @@ NOTE_DEFINITIONS: dict[CardType, NoteDefinition] = {
         (
             {
                 "Name": "Card 1",
-                "Front": "判断：{{Question}}<div class=judge-buttons><button class=option-button onclick=\"pycmd('ans')\">正确</button><button class=option-button onclick=\"pycmd('ans')\">错误</button></div>" + CARD_ENHANCEMENT_SCRIPT,
-                "Back": "{{FrontSide}}<div class=answer>{{Answer}}</div>{{#Remark}}<div class=remark>{{Remark}}</div>{{/Remark}}" + CARD_ENHANCEMENT_SCRIPT,
+                "Front": _card_shell(
+                    "judge",
+                    "判断",
+                    '<div class="ff-prompt">{{Question}}</div>'
+                    '<div class="judge-buttons">'
+                    '<button type="button" class="option-button" onclick="pycmd(\'ans\')">正确</button>'
+                    '<button type="button" class="option-button" onclick="pycmd(\'ans\')">错误</button>'
+                    '</div>',
+                ),
+                "Back": _card_shell(
+                    "judge",
+                    "判断 / 结论",
+                    '<div class="ff-prompt">{{Question}}</div>'
+                    + _answer_block("{{Answer}}")
+                    + _remark_block(),
+                ),
             },
         ),
     ),
@@ -155,8 +318,21 @@ NOTE_DEFINITIONS: dict[CardType, NoteDefinition] = {
         (
             {
                 "Name": "Card 1",
-                "Front": "{{Question}}<div class=option-list id=flashforge-options>{{Options}}</div>" + AUTO_FLIP_OPTION_SCRIPT + CARD_ENHANCEMENT_SCRIPT,
-                "Back": "{{FrontSide}}<div class=answer>{{Answer}}</div>{{#Remark}}<div class=remark>{{Remark}}</div>{{/Remark}}" + CARD_ENHANCEMENT_SCRIPT,
+                "Front": _card_shell(
+                    "choice",
+                    "单项选择",
+                    '<div class="ff-prompt">{{Question}}</div>'
+                    '<div class="option-list" id="flashforge-options">{{Options}}</div>'
+                    + AUTO_FLIP_OPTION_SCRIPT,
+                ),
+                "Back": _card_shell(
+                    "choice",
+                    "单项选择 / 答案",
+                    '<div class="ff-prompt">{{Question}}</div>'
+                    '<div class="ff-option-review">{{Options}}</div>'
+                    + _answer_block("{{Answer}}")
+                    + _remark_block(),
+                ),
             },
         ),
     ),
@@ -166,8 +342,23 @@ NOTE_DEFINITIONS: dict[CardType, NoteDefinition] = {
         (
             {
                 "Name": "Card 1",
-                "Front": "多选：{{Question}}<div class=option-list id=flashforge-options>{{Options}}</div>" + MULTI_SELECT_OPTION_SCRIPT + "<button class=answer-button onclick=\"pycmd('ans')\">显示答案</button>" + CARD_ENHANCEMENT_SCRIPT,
-                "Back": "{{FrontSide}}<div class=answer>{{Answer}}</div>{{#Remark}}<div class=remark>{{Remark}}</div>{{/Remark}}" + CARD_ENHANCEMENT_SCRIPT,
+                "Front": _card_shell(
+                    "multichoice",
+                    "多项选择",
+                    '<div class="ff-prompt">{{Question}}</div>'
+                    '<div class="option-list" id="flashforge-options">{{Options}}</div>'
+                    + MULTI_SELECT_OPTION_SCRIPT
+                    + '<button type="button" class="answer-button" '
+                    'onclick="pycmd(\'ans\')">核对答案</button>',
+                ),
+                "Back": _card_shell(
+                    "multichoice",
+                    "多项选择 / 答案",
+                    '<div class="ff-prompt">{{Question}}</div>'
+                    '<div class="ff-option-review">{{Options}}</div>'
+                    + _answer_block("{{Answer}}")
+                    + _remark_block(),
+                ),
             },
         ),
     ),
@@ -244,27 +435,58 @@ class AnkiConnectClient:
                 cardTemplates=list(definition.templates),
             )
 
-    def upgrade_note_types(self) -> int:
+    def upgrade_note_types(self, card_types: Iterable[CardType] | None = None) -> int:
         """Update FlashForge-owned models without touching unrelated Anki models."""
         existing = set(self.invoke("modelNames") or [])
+        requested_types = set(card_types) if card_types is not None else None
         updated_count = 0
-        for definition in NOTE_DEFINITIONS.values():
+        definitions = (
+            definition
+            for card_type, definition in NOTE_DEFINITIONS.items()
+            if requested_types is None or card_type in requested_types
+        )
+        for definition in definitions:
             if definition.model_name not in existing:
                 continue
-            templates = {
-                template["Name"]: {"Front": template["Front"], "Back": template["Back"]}
-                for template in definition.templates
-            }
-            self.invoke(
-                "updateModelStyling",
-                model={"name": definition.model_name, "css": BASE_CSS},
-            )
-            self.invoke(
-                "updateModelTemplates",
-                model={"name": definition.model_name, "templates": templates},
-            )
+            self._update_note_type(definition)
             updated_count += 1
         return updated_count
+
+    def sync_note_types(self, card_types: Iterable[CardType] | None = None) -> int:
+        """Create missing models and refresh existing models in one Anki round trip."""
+        existing = set(self.invoke("modelNames") or [])
+        requested_types = set(card_types) if card_types is not None else None
+        updated_count = 0
+        for card_type, definition in NOTE_DEFINITIONS.items():
+            if requested_types is not None and card_type not in requested_types:
+                continue
+            if definition.model_name not in existing:
+                self.invoke(
+                    "createModel",
+                    modelName=definition.model_name,
+                    inOrderFields=list(definition.fields),
+                    css=BASE_CSS,
+                    isCloze=definition.is_cloze,
+                    cardTemplates=list(definition.templates),
+                )
+                continue
+            self._update_note_type(definition)
+            updated_count += 1
+        return updated_count
+
+    def _update_note_type(self, definition: NoteDefinition) -> None:
+        templates = {
+            template["Name"]: {"Front": template["Front"], "Back": template["Back"]}
+            for template in definition.templates
+        }
+        self.invoke(
+            "updateModelStyling",
+            model={"name": definition.model_name, "css": BASE_CSS},
+        )
+        self.invoke(
+            "updateModelTemplates",
+            model={"name": definition.model_name, "templates": templates},
+        )
 
     def ensure_and_upgrade_note_types(self) -> int:
         self.ensure_note_types()
@@ -289,7 +511,7 @@ class AnkiConnectClient:
         total = len(card_list)
         notes = [self.note_for_card(card, target_deck) for card in card_list]
         with self._import_request_scope():
-            self.ensure_note_types(card.card_type for card in card_list)
+            self.sync_note_types(card.card_type for card in card_list)
             self.invoke("createDeck", deck=target_deck)
             for start in range(0, total, IMPORT_BATCH_SIZE):
                 chunk = notes[start : start + IMPORT_BATCH_SIZE]

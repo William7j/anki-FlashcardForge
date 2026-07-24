@@ -26,6 +26,19 @@ def test_default_prompt_can_enable_document_extraction_rules() -> None:
     assert "课堂内容" in prompt
 
 
+def test_default_prompt_can_enable_socratopia_progress_rules() -> None:
+    prompt = PromptManager().render(
+        "结构化课程材料",
+        document_mode=True,
+        socratopia_mode=True,
+    )
+
+    assert "Socratopia 自适应制卡规则" in prompt
+    assert "每个高价值小节都可以制卡" in prompt
+    assert "确保浅讲内容不会因课堂记录较少而遗漏" in prompt
+    assert "已有卡片问题" in prompt
+
+
 def test_user_override_is_loaded_and_can_be_removed(tmp_path) -> None:
     manager = PromptManager(user_prompt_dir=tmp_path)
     template = "# 自定义\n\n{{学习材料}}"

@@ -27,7 +27,24 @@ JSON_RETRY_INSTRUCTIONS = """
 - 只输出一个包含 cards 数组的合法 JSON 对象，不要使用 Markdown 代码块或附加说明。
 - 本次最多生成 16 张卡片，只保留最重要的知识点。
 - 确保所有字符串、对象和数组均完整闭合。
+- LaTeX 命令的反斜杠必须按 JSON 规则写成双反斜杠，例如 `\\\\frac`、`\\\\int` 和 `\\\\(`。
 """.rstrip()
+
+JSON_SIMPLE_ESCAPES = frozenset('"\\/bfnrt')
+LATEX_COMMANDS = frozenset(
+    {
+        "alpha", "approx", "bar", "begin", "beta", "binom", "boxed",
+        "cdot", "cdots", "cos", "delta", "displaystyle", "div", "dots",
+        "end", "exp", "frac", "gamma", "ge", "geq", "hat", "infty",
+        "int", "lambda", "ldots", "le", "left", "leq", "lim", "limits",
+        "ln", "log", "mathbb", "mathbf", "mathcal", "mathit", "mathrm",
+        "mathsf", "mathtt", "matrix", "mp", "mu", "nabla", "ne", "neq",
+        "omega", "operatorname", "overbrace", "overline", "overset", "partial",
+        "phi", "pi", "pm", "prod", "qquad", "quad", "right", "rho",
+        "sigma", "sin", "sqrt", "substack", "sum", "tan", "text", "theta",
+        "times", "underbrace", "underline", "underset", "vec",
+    }
+)
 
 
 def parse_cards(raw_response: str) -> list[Flashcard]:
@@ -57,6 +74,7 @@ def _extract_json_payload(raw_response: str) -> Any:
     source = raw_response.strip().lstrip("\ufeff")
     if not source:
         raise CardGenerationError("模型返回了空内容。")
+    source = _repair_json_latex_escapes(source)
     try:
         return json.loads(source)
     except json.JSONDecodeError:
@@ -78,6 +96,59 @@ def _extract_json_payload(raw_response: str) -> Any:
     if "[" not in source and "{" not in source:
         raise CardGenerationError("模型没有返回 JSON 卡片数组。")
     raise CardGenerationError("模型返回的卡片 JSON 不完整或无法解析。")
+
+
+def _repair_json_latex_escapes(source: str) -> str:
+    """Escape bare LaTeX backslashes inside JSON strings without changing JSON syntax."""
+
+    repaired: list[str] = []
+    in_string = False
+    position = 0
+    while position < len(source):
+        char = source[position]
+        if not in_string:
+            repaired.append(char)
+            if char == '"':
+                in_string = True
+            position += 1
+            continue
+
+        if char == '"':
+            repaired.append(char)
+            in_string = False
+            position += 1
+            continue
+
+        if char != "\\" or position + 1 >= len(source):
+            repaired.append(char)
+            position += 1
+            continue
+
+        next_char = source[position + 1]
+        if _is_bare_latex_escape(source, position):
+            repaired.append("\\\\")
+            position += 1
+            continue
+
+        repaired.extend((char, next_char))
+        position += 2
+
+    return "".join(repaired)
+
+
+def _is_bare_latex_escape(source: str, position: int) -> bool:
+    next_char = source[position + 1]
+    if next_char in "()[]{} ,;:!%#&_":
+        return True
+    if next_char == "u":
+        unicode_digits = source[position + 2 : position + 6]
+        return len(unicode_digits) != 4 or any(
+            digit not in "0123456789abcdefABCDEF" for digit in unicode_digits
+        )
+    command_match = re.match(r"[A-Za-z]+", source[position + 1 :])
+    if command_match and command_match.group(0).lower() in LATEX_COMMANDS:
+        return True
+    return next_char not in JSON_SIMPLE_ESCAPES
 
 
 def _split_document_material(material: str) -> list[str]:
@@ -150,15 +221,24 @@ class CardPipeline:
         self.ocr_client = ocr_client
 
     def generate_from_text(
-        self, material: str, *, document_mode: bool = False
+        self,
+        material: str,
+        *,
+        document_mode: bool = False,
+        socratopia_mode: bool = False,
     ) -> list[Flashcard]:
-        chunks = _split_document_material(material) if document_mode else [material]
+        chunks = (
+            _split_document_material(material)
+            if document_mode and not socratopia_mode
+            else [material]
+        )
         cards: list[Flashcard] = []
         for chunk in chunks:
             prompt = self.prompt_manager.render(
                 chunk,
                 self.settings.prompt_name,
                 document_mode=document_mode,
+                socratopia_mode=socratopia_mode,
             )
             cards.extend(self._generate_text_cards(prompt))
         return _deduplicate_cards(cards)
@@ -173,7 +253,9 @@ class CardPipeline:
                 )
             except (CardGenerationError, LlmOutputTruncatedError) as second_error:
                 raise CardGenerationError(
-                    "模型连续两次返回不完整或无效的卡片 JSON。请缩短材料或降低生成数量后重试。"
+                    "模型连续两次返回不完整或无效的卡片 JSON。"
+                    "请缩短材料或降低生成数量后重试。\n"
+                    f"最后一次错误：{second_error}"
                 ) from second_error
 
     def generate_from_image(self, image_path: Path) -> list[Flashcard]:
@@ -191,6 +273,7 @@ class CardPipeline:
         material: str = "",
         image_path: Path | None = None,
         document_mode: bool = False,
+        socratopia_mode: bool = False,
     ) -> Flashcard:
         request_image_path = image_path
         if image_path is not None and self.settings.image_input_mode == "ocr":
@@ -207,6 +290,7 @@ class CardPipeline:
             self.settings.prompt_name,
             image_mode=request_image_path is not None,
             document_mode=document_mode and request_image_path is None,
+            socratopia_mode=socratopia_mode and request_image_path is None,
         )
         existing = {
             "type": card.card_type.value,

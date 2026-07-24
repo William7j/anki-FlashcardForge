@@ -28,6 +28,24 @@ def test_parses_json_object_inside_markdown_fence() -> None:
     assert cards[0].fields["answer"] == "A"
 
 
+def test_repairs_unescaped_latex_backslashes_in_model_json() -> None:
+    cards = parse_cards(
+        r'{"cards":[{"type":"cloze","fields":{"content":"积分为{{c1::\(\frac{x^{2}}{2}+C\)}}"}}]}'
+    )
+
+    assert cards[0].fields["content"] == r"积分为{{c1::\(\frac{x^{2} }{2}+C\)}}"
+
+
+def test_keeps_valid_json_newlines_while_repairing_latex() -> None:
+    cards = parse_cards(
+        r'{"cards":[{"type":"choice","fields":{"question":"计算 \int x dx",'
+        r'"options":"A\nB\nC\nD","answer":"A"}}]}'
+    )
+
+    assert cards[0].fields["question"] == r"计算 \int x dx"
+    assert cards[0].fields["options"].splitlines() == ["A", "B", "C", "D"]
+
+
 def test_reports_truncated_json_as_incomplete() -> None:
     with pytest.raises(CardGenerationError, match="不完整"):
         parse_cards('{"cards":[{"type":"qa","fields":{"question":"Q","answer":"A"}}')
@@ -77,6 +95,19 @@ def test_generation_retries_once_after_invalid_json() -> None:
     assert cards[0].fields["answer"] == "A"
     assert len(llm.prompts) == 2
     assert "JSON 格式重试" in llm.prompts[1]
+
+
+def test_generation_reports_the_last_retry_error() -> None:
+    llm = SequenceLlmClient(
+        [
+            '{"cards":[{"type":"qa"',
+            '{"cards":[{"type":"qa","fields":',
+        ]
+    )
+    pipeline = CardPipeline(AppSettings(api_key="test"), llm_client=llm)
+
+    with pytest.raises(CardGenerationError, match="最后一次错误.*不完整或无法解析"):
+        pipeline.generate_from_text("学习材料")
 
 
 def test_document_generation_splits_long_material_and_deduplicates_cards() -> None:
@@ -161,3 +192,22 @@ def test_document_generation_uses_document_extraction_prompt() -> None:
 
     assert cards[0].fields["answer"] == "A"
     assert "本地资料提炼规则" in llm.prompts[0]
+
+
+def test_socratopia_generation_keeps_evidence_and_textbook_in_one_prompt() -> None:
+    llm = FakeLlmClient(
+        '{"cards":[{"type":"qa","fields":{"question":"Q","answer":"A"}}]}'
+    )
+    pipeline = CardPipeline(AppSettings(api_key="test"), llm_client=llm)
+    material = "课堂证据\n\n" + "教材原文" * DOCUMENT_CHUNK_CHARACTERS
+
+    cards = pipeline.generate_from_text(
+        material,
+        document_mode=True,
+        socratopia_mode=True,
+    )
+
+    assert cards[0].fields["answer"] == "A"
+    assert len(llm.prompts) == 1
+    assert "Socratopia 自适应制卡规则" in llm.prompts[0]
+    assert material in llm.prompts[0]

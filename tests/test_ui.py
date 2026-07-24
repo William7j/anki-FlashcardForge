@@ -1,15 +1,18 @@
 import time
+from datetime import datetime
 
 from PySide6.QtCore import QThread, QTimer
 from PySide6.QtGui import QKeySequence
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QDialogButtonBox, QMessageBox
 
 from flashforge.config import AppSettings
 from flashforge.models import Flashcard
 from flashforge.prompts import PromptManager
 from flashforge.screenshot import GlobalScreenshotHotkey, RegionSelector, capture_virtual_desktop
+from flashforge.socratopia import SocratopiaCourse, SocratopiaLesson
 from flashforge.ui import MainWindow
 from flashforge.ui import main_window as ui_main_window
+from flashforge.ui.socratopia_dialog import SocratopiaLessonDialog
 
 
 def _window(monkeypatch, tmp_path, settings=None):
@@ -247,6 +250,122 @@ title: 微积分课堂
     window.close()
 
 
+def test_importing_socratopia_enters_adaptive_course_mode(monkeypatch, tmp_path) -> None:
+    _, window, _ = _window(monkeypatch, tmp_path)
+    account = tmp_path / "account"
+    account.mkdir()
+
+    class FakeCourse:
+        account_path = account
+        profile_name = "学习者"
+        title = "计算机组成原理"
+        display_name = "学习者 / 计算机组成原理 [当前]"
+        key = "account/student/SQ/tb1"
+        is_active = True
+
+    class FakeLesson:
+        title = "边界对齐与字节序 (07-23)"
+
+    class FakeSource:
+        course = FakeCourse()
+        lesson = FakeLesson()
+        material = "# Socratopia 自适应制卡材料\n\n已学内容"
+        lesson_evidence_count = 2
+        textbook_section_count = 1
+        existing_card_count = 3
+
+    class FakeClient:
+        def is_available(self):
+            return True
+
+    class FakeDialog:
+        def __init__(self, courses, lessons_by_course, **kwargs):
+            self.selected_course = courses[0]
+            self.selected_lesson = lessons_by_course[courses[0].key][0]
+
+        def exec(self):
+            return True
+
+    monkeypatch.setattr(
+        ui_main_window,
+        "discover_socratopia_accounts",
+        lambda: [account],
+    )
+    monkeypatch.setattr(
+        ui_main_window,
+        "discover_socratopia_courses",
+        lambda path: [FakeCourse()],
+    )
+    monkeypatch.setattr(
+        ui_main_window,
+        "discover_socratopia_lessons",
+        lambda course: [FakeLesson()],
+    )
+    monkeypatch.setattr(ui_main_window, "SocratopiaTextbookClient", FakeClient)
+    monkeypatch.setattr(ui_main_window, "SocratopiaLessonDialog", FakeDialog)
+    monkeypatch.setattr(
+        ui_main_window,
+        "load_socratopia_material",
+        lambda course, **kwargs: FakeSource(),
+    )
+
+    window._load_socratopia_course()
+
+    assert window._document_mode is True
+    assert window._socratopia_mode is True
+    assert window._document_path == account
+    assert "已学内容" in window.material_input.toPlainText()
+    assert "3 张已有卡" in window.document_status.text()
+    assert "边界对齐与字节序" in window.document_status.text()
+    assert window.load_socratopia_button.text() == "导入自 Socratopia"
+    window.close()
+
+
+def test_socratopia_dialog_displays_course_and_lesson_records(tmp_path) -> None:
+    app = QApplication.instance() or QApplication([])
+    course = SocratopiaCourse(
+        account_path=tmp_path / "account",
+        profile_id="student",
+        profile_name="学习者",
+        world_id="SQ",
+        textbook_id="tb1",
+        title="计算机组成原理",
+        format="qbook",
+        current_page=12,
+        total_pages=100,
+        is_active=True,
+    )
+    lesson = SocratopiaLesson(
+        course_key=course.key,
+        conversation_id="chat1",
+        title="边界对齐与字节序 (07-23)",
+        started_at=datetime(2026, 7, 23, 12, 0),
+        message_count=52,
+        study_seconds=1800,
+        summary="课堂中纠正了边界对齐的常见误解。",
+        teaching_effect="已经理解减少内存读取次数。",
+    )
+
+    dialog = SocratopiaLessonDialog(
+        [course], {course.key: [lesson]}, connected=True
+    )
+    app.processEvents()
+
+    assert "计算机组成原理" in dialog.course_input.currentText()
+    assert dialog.lesson_table.rowCount() == 1
+    assert dialog.lesson_table.item(0, 1).text() == lesson.title
+    assert dialog.lesson_table.item(0, 3).text() == "52"
+    assert "常见误解" in dialog.lesson_preview.toPlainText()
+    assert (
+        dialog.findChild(QDialogButtonBox).button(QDialogButtonBox.StandardButton.Cancel).text()
+        == "取消"
+    )
+    dialog._accept_selection()
+    assert dialog.selected_course == course
+    assert dialog.selected_lesson == lesson
+    dialog.close()
+
+
 def test_editing_cards_does_not_schedule_another_auto_import(monkeypatch, tmp_path) -> None:
     _, window, _ = _window(
         monkeypatch,
@@ -262,6 +381,61 @@ def test_editing_cards_does_not_schedule_another_auto_import(monkeypatch, tmp_pa
     assert window._auto_import_pending is False
     assert window.import_button.isEnabled()
     window.close()
+
+
+def test_deleting_all_preview_cards_requires_confirmation(monkeypatch, tmp_path) -> None:
+    _, window, _ = _window(monkeypatch, tmp_path)
+    cards = [
+        Flashcard.from_payload(
+            {"type": "qa", "fields": {"question": f"Q{index}", "answer": "A"}}
+        )
+        for index in range(2)
+    ]
+    answers = iter(
+        [QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes]
+    )
+    prompts = []
+
+    def answer_question(*args):
+        prompts.append(args)
+        return next(answers)
+
+    monkeypatch.setattr(QMessageBox, "question", answer_question)
+    window.material_input.setPlainText("保留的原始材料")
+    window._show_cards(cards, schedule_auto_import=False)
+
+    assert window.delete_all_cards_button.isEnabled()
+    window._delete_all_cards()
+    assert len(window.cards) == 2
+
+    window._delete_all_cards()
+
+    assert window.cards == []
+    assert window.card_table.rowCount() == 0
+    assert not window.import_button.isEnabled()
+    assert not window.delete_all_cards_button.isEnabled()
+    assert window.material_input.toPlainText() == "保留的原始材料"
+    assert "2 张卡片" in prompts[0][2]
+    assert "不会删除已经导入 Anki" in prompts[0][2]
+    assert "已删除全部 2 张预览卡片" in window.statusBar().currentMessage()
+    window.close()
+
+
+def test_closing_main_window_explicitly_quits_application(monkeypatch, tmp_path) -> None:
+    _, window, _ = _window(monkeypatch, tmp_path)
+    quits = []
+    cleanups = []
+    monkeypatch.setattr(window, "_quit_application", lambda: quits.append(True))
+    monkeypatch.setattr(
+        window._screenshot_hotkey,
+        "unregister",
+        lambda: cleanups.append(True),
+    )
+
+    assert window.close() is True
+
+    assert quits == [True]
+    assert cleanups == [True]
 
 
 def test_screenshot_auto_starts_generation_when_enabled(monkeypatch, tmp_path) -> None:
